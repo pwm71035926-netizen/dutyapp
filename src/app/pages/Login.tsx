@@ -1,32 +1,33 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useContext } from 'react';
 import { useNavigate } from 'react-router';
 import { api } from '../lib/api';
+import { NavigationContext } from '../context/NavigationContext';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from '../components/ui/card';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from '../components/ui/dialog';
 import { Checkbox } from '../components/ui/checkbox';
 import { toast } from 'sonner';
-import { CalendarDays, User as UserIcon, Lock, ShieldQuestion, HelpCircle, Loader2 } from 'lucide-react';
+import { CalendarDays, User as UserIcon, Lock, ShieldQuestion, Loader2 } from 'lucide-react';
 
 export default function Login() {
+  const navigate = useNavigate();
+  const { startNavigation } = useContext(NavigationContext);
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
-  const [rememberMe, setRememberMe] = useState(true);
   const [checkingSession, setCheckingSession] = useState(true);
+  const [rememberMe, setRememberMe] = useState(true);
   
-  // Reset Password State
+  // Password Reset States
+  const [isResetDialogOpen, setIsResetDialogOpen] = useState(false);
+  const [resetStep, setResetStep] = useState(1);
   const [resetUsername, setResetUsername] = useState('');
+  const [resetLoading, setResetLoading] = useState(false);
   const [securityQuestion, setSecurityQuestion] = useState('');
   const [securityAnswer, setSecurityAnswer] = useState('');
   const [newPassword, setNewPassword] = useState('');
-  const [resetStep, setResetStep] = useState(1); // 1: username, 2: answer/new pass
-  const [isResetDialogOpen, setIsResetDialogOpen] = useState(false);
-  const [resetLoading, setResetLoading] = useState(false);
-
-  const navigate = useNavigate();
 
   useEffect(() => {
     checkExistingSession();
@@ -36,12 +37,10 @@ export default function Login() {
     try {
       const session = await api.getSession();
       if (session?.access_token) {
-        // If we have a session, try to get the user to verify it's valid
         await api.getCurrentUser(session.access_token);
-        navigate('/dashboard');
+        startNavigation('/dashboard', navigate);
       }
     } catch (error) {
-      // Session invalid or expired
       console.log('No valid session found');
     } finally {
       setCheckingSession(false);
@@ -58,13 +57,9 @@ export default function Login() {
       if (result.session?.access_token) {
         try {
           await api.getCurrentUser(result.session.access_token);
-          
-          // Save remember preference if needed (though Supabase persists by default, 
-          // we can handle specific logic here if we wanted to clear it on logout)
           localStorage.setItem('gongdang_remember_me', rememberMe ? 'true' : 'false');
-          
           toast.success('로그인 성공!');
-          navigate('/dashboard');
+          startNavigation('/dashboard', navigate);
         } catch (tokenError: any) {
           console.error('Token validation failed:', tokenError);
           toast.error('인증에 실패했습니다. 다시 시도해주세요.');
@@ -126,7 +121,6 @@ export default function Login() {
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50 p-4 pt-14 select-none overflow-hidden">
-      {/* iOS/Android Status Bar Safe Area */}
       <div className="fixed top-0 left-0 right-0 z-50 bg-white h-12 w-full pt-safe" />
 
       <div className="w-full max-w-md animate-in fade-in zoom-in duration-700">
@@ -292,7 +286,7 @@ export default function Login() {
             <div className="mt-10 text-center">
               <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-4">또는 아래 버튼으로 시작하세요</p>
               <button
-                onClick={() => navigate('/signup')}
+                onClick={() => startNavigation('/signup', navigate)}
                 className="h-14 w-full rounded-2xl border border-gray-100 bg-white text-indigo-600 hover:bg-gray-50 font-bold transition-all active:scale-95 shadow-sm"
               >
                 회원가입

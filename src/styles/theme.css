@@ -200,7 +200,7 @@
   }
 }
 
-/* Sonner Center Alignment Override */
+/* Sonner Center Alignment Override (Centered at 40vh for 'Gong-Dang' UX) */
 [data-sonner-toaster] {
   display: flex !important;
   align-items: center !important;
@@ -219,11 +219,27 @@
   margin: 0 !important;
   pointer-events: auto !important;
   position: absolute !important;
-  top: 50% !important;
+  top: 40vh !important; /* Fixed at 40vh as per requirement */
   left: 50% !important;
   transform: translate(-50%, -50%) !important;
   --y: 0 !important;
   --x: 0 !important;
+  border-radius: 28px !important;
+  border: none !important;
+  box-shadow: 0 25px 70px -10px rgba(0, 0, 0, 0.4) !important;
+  padding: 24px 36px !important;
+  font-size: 16px !important;
+  font-weight: 900 !important;
+  background: rgba(255, 255, 255, 0.98) !important;
+  backdrop-filter: blur(20px) !important;
+  max-width: 320px !important;
+  width: calc(100vw - 64px) !important;
+  text-align: center !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  color: #1a1a1a !important;
+  border-bottom: 6px solid #6366f1 !important;
 }
 
 [data-sonner-toaster] [data-sonner-toast][data-mounted="true"] {

@@ -1,14 +1,14 @@
-import { useState } from 'react';
+import { useState, useContext } from 'react';
 import { useNavigate } from 'react-router';
 import { api } from '../lib/api';
+import { NavigationContext } from '../context/NavigationContext';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from '../components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { toast } from 'sonner';
-import { CalendarDays, User as UserIcon, Lock, ShieldCheck, Loader2 } from 'lucide-react';
+import { CalendarDays, User as UserIcon, Lock, ShieldCheck } from 'lucide-react';
 
 const SECURITY_QUESTIONS = [
   "가장 기억에 남는 선생님 성함은?",
@@ -19,15 +19,16 @@ const SECURITY_QUESTIONS = [
 ];
 
 export default function Signup() {
+  const navigate = useNavigate();
+  const { startNavigation } = useContext(NavigationContext);
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [name, setName] = useState('');
+  const [serviceNumber, setServiceNumber] = useState('');
   const [role, setRole] = useState('user');
   const [securityQuestion, setSecurityQuestion] = useState(SECURITY_QUESTIONS[0]);
   const [securityAnswer, setSecurityAnswer] = useState('');
   const [loading, setLoading] = useState(false);
-
-  const navigate = useNavigate();
 
   const handleSignup = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -38,12 +39,13 @@ export default function Signup() {
         username,
         password,
         name,
+        serviceNumber,
         role,
         securityQuestion,
         securityAnswer
       });
       toast.success('회원가입 성공! 로그인해주세요.');
-      navigate('/');
+      startNavigation('/', navigate);
     } catch (error: any) {
       toast.error(error.message || '회원가입 실패');
     } finally {
@@ -53,7 +55,6 @@ export default function Signup() {
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50 p-4 pt-14 select-none overflow-y-auto">
-      {/* iOS/Android Status Bar Safe Area */}
       <div className="fixed top-0 left-0 right-0 z-50 bg-white h-12 w-full pt-safe" />
 
       <div className="w-full max-w-md animate-in fade-in zoom-in duration-700">
@@ -105,6 +106,28 @@ export default function Signup() {
                     required
                   />
                 </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label htmlFor="serviceNumber" className="text-[10px] font-black uppercase tracking-widest text-indigo-600 flex items-center gap-2 ml-1">
+                  군번
+                </Label>
+                <Input
+                  id="serviceNumber"
+                  type="text"
+                  placeholder="00-000000"
+                  className="h-12 rounded-2xl border-gray-100 bg-gray-50 focus:bg-white focus:border-indigo-500/50 transition-all text-sm text-gray-900 font-mono"
+                  value={serviceNumber}
+                  onChange={(e) => {
+                    const val = e.target.value.replace(/[^0-9]/g, '');
+                    let formatted = val;
+                    if (val.length > 2) {
+                      formatted = val.slice(0, 2) + '-' + val.slice(2, 8);
+                    }
+                    setServiceNumber(formatted);
+                  }}
+                  required
+                />
               </div>
 
               <div className="space-y-1.5">
@@ -174,7 +197,7 @@ export default function Signup() {
             </form>
             <div className="mt-8 text-center">
               <button
-                onClick={() => navigate('/')}
+                onClick={() => startNavigation('/', navigate)}
                 className="text-[10px] font-black uppercase tracking-widest text-gray-400 hover:text-indigo-600 transition-colors"
               >
                 이미 계정이 있습니까? 로그인

@@ -3,11 +3,22 @@ import { RouterProvider } from 'react-router';
 import { router } from './routes';
 import { Toaster } from 'sonner';
 import { SplashScreen } from './components/SplashScreen';
+import { PageLoader } from './components/PageLoader';
 import { AnimatePresence } from 'motion/react';
-import { initPwaInstallPrompt } from './utils/notification';
+import { NavigationContext } from './context/NavigationContext';
 
 export default function App() {
   const [showSplash, setShowSplash] = useState(true);
+  const [isNavigating, setIsNavigating] = useState(false);
+
+  const startNavigation = (to: string, navigateFn: (to: string) => void) => {
+    setIsNavigating(true);
+    // 600ms Delay for smooth UX as per v1.1.2 requirement
+    setTimeout(() => {
+      navigateFn(to);
+      setIsNavigating(false);
+    }, 600);
+  };
 
   useEffect(() => {
     // Set Light Mode as Default
@@ -67,12 +78,6 @@ export default function App() {
     metaAppleStatusBar.content = 'black-translucent';
     document.head.appendChild(metaAppleStatusBar);
 
-    // Initialize PWA Install Prompt Listener
-    const handleBeforeInstallPrompt = (e: any) => {
-      e.preventDefault();
-    };
-    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
-
     // Register Service Worker
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
@@ -94,48 +99,31 @@ export default function App() {
 
     return () => {
       clearTimeout(timer);
-      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
-      document.head.removeChild(manifestLink);
-      document.head.removeChild(metaTheme);
-      document.head.removeChild(metaMobileWeb);
-      document.head.removeChild(metaAppleMobileWeb);
-      document.head.removeChild(metaAppleStatusBar);
+      if (document.head.contains(manifestLink)) document.head.removeChild(manifestLink);
+      if (document.head.contains(metaTheme)) document.head.removeChild(metaTheme);
+      if (document.head.contains(metaMobileWeb)) document.head.removeChild(metaMobileWeb);
+      if (document.head.contains(metaAppleMobileWeb)) document.head.removeChild(metaAppleMobileWeb);
+      if (document.head.contains(metaAppleStatusBar)) document.head.removeChild(metaAppleStatusBar);
     };
   }, []);
 
   return (
-    <>
+    <NavigationContext.Provider value={{ isNavigating, startNavigation }}>
       <AnimatePresence mode="wait">
-        {showSplash && <SplashScreen key="splash" />}
+        {showSplash ? (
+          <SplashScreen key="splash" />
+        ) : isNavigating ? (
+          <PageLoader key="loader" isVisible={true} />
+        ) : null}
       </AnimatePresence>
       <RouterProvider router={router} />
       <Toaster 
         position="top-center" 
         expand={false}
         visibleToasts={1}
-        duration={500}
-        toastOptions={{
-          style: {
-            borderRadius: '28px',
-            border: 'none',
-            boxShadow: '0 25px 70px -10px rgba(0, 0, 0, 0.4)',
-            padding: '24px 36px',
-            fontSize: '16px',
-            fontWeight: '900',
-            background: 'rgba(255, 255, 255, 0.98)',
-            backdropFilter: 'blur(20px)',
-            maxWidth: '320px',
-            width: 'calc(100vw - 64px)',
-            textAlign: 'center',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            color: '#1a1a1a',
-            borderBottom: '6px solid #6366f1',
-            margin: 0,
-          }
-        }}
+        duration={2500}
+        theme="light"
       />
-    </>
+    </NavigationContext.Provider>
   );
 }

@@ -59,7 +59,7 @@ export function SplashScreen() {
           transition={{ delay: 0.7, duration: 0.5 }}
           className="mt-3 text-xs font-bold text-gray-500 tracking-[0.2em] uppercase"
         >
-          공병반 당직 관리 모바일
+          공병 당직 관리 플랫폼
         </motion.p>
       </motion.div>
 

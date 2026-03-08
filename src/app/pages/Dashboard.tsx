@@ -1,6 +1,7 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useContext, useMemo, useCallback, memo } from 'react';
 import { useNavigate } from 'react-router';
 import { api } from '../lib/api';
+import { NavigationContext } from '../context/NavigationContext';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
@@ -13,6 +14,12 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '../components/ui/dialog';
+import { ConfirmDialog } from '../components/ui/confirm-dialog';
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from '../components/ui/popover';
 import {
   Select,
   SelectContent,
@@ -27,7 +34,7 @@ import {
   ChevronLeft,
   ChevronRight,
   LogOut,
-  Settings,
+  Settings as SettingsIcon,
   Bell,
   RefreshCw,
   Calendar as CalendarIcon,
@@ -44,15 +51,71 @@ import {
   PlusCircle,
   ArrowLeftRight,
   ShieldCheck,
-  Loader2
+  Loader2,
+  Wallet
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { requestNotificationPermission, showNotification, presentPwaInstall } from '../utils/notification';
+
+// Memoized Calendar Day for high performance
+const CalendarDay = memo(({ 
+  day, 
+  duty, 
+  isSelected, 
+  isToday, 
+  isHoliday, 
+  onClick, 
+  index 
+}: { 
+  day: number | null, 
+  duty: any, 
+  isSelected: boolean, 
+  isToday: boolean, 
+  isHoliday: boolean, 
+  onClick: (day: number) => void,
+  index: number
+}) => {
+  if (!day) return <div className="aspect-square invisible" />;
+  
+  const isMyDuty = duty?.isMyDuty;
+
+  return (
+    <div
+      className={`aspect-square flex flex-col items-center justify-center rounded-xl transition-all relative cursor-pointer active:scale-90 select-none ${
+        isSelected 
+          ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-200' 
+          : isToday 
+            ? 'bg-indigo-50 text-indigo-700 ring-1 ring-inset ring-indigo-200' 
+            : 'hover:bg-gray-50'
+      }`}
+      onClick={() => onClick(day)}
+    >
+      <span className={`text-sm font-bold ${
+        isSelected 
+          ? 'text-white' 
+          : (index % 7 === 0 || isHoliday) 
+            ? 'text-red-500' 
+            : index % 7 === 6 
+              ? 'text-blue-500' 
+              : 'text-gray-700'
+      }`}>
+        {day}
+      </span>
+      {duty && !isSelected && (
+        <div className={`w-1.5 h-1.5 rounded-full mt-1 ${isMyDuty ? 'bg-orange-500 animate-pulse' : duty.type === 'weekend' ? 'bg-red-400' : 'bg-gray-300'}`} />
+      )}
+      {isSelected && duty && <div className="absolute -bottom-1 w-1 h-1 bg-white rounded-full" />}
+    </div>
+  );
+});
 
 interface User {
   id: string;
   email: string;
   name: string;
   role: string;
+  username?: string;
+  serviceNumber?: string;
 }
 
 interface Duty {
@@ -84,10 +147,9 @@ interface SwapRequest {
   status: 'pending' | 'approved' | 'rejected';
 }
 
-import { requestNotificationPermission, showNotification, presentPwaInstall } from '../utils/notification';
-
 export default function Dashboard() {
   const navigate = useNavigate();
+  const { startNavigation } = useContext(NavigationContext);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [token, setToken] = useState<string | null>(null);
   const [currentDate, setCurrentDate] = useState(new Date());
@@ -96,22 +158,79 @@ export default function Dashboard() {
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [swapRequests, setSwapRequests] = useState<SwapRequest[]>([]);
   const [loading, setLoading] = useState(true);
+  const [direction, setDirection] = useState(0); // -1 for left, 1 for right
   const [selectedDate, setSelectedDate] = useState<number | null>(new Date().getDate());
   const [selectedUserId, setSelectedUserId] = useState<string>('');
   const [swapDialogOpen, setSwapDialogOpen] = useState(false);
   const [notificationDialogOpen, setNotificationDialogOpen] = useState(false);
   const [profileDialogOpen, setProfileDialogOpen] = useState(false);
   const [editProfileMode, setEditProfileMode] = useState(false);
-  const [profileForm, setProfileForm] = useState({ name: '', password: '' });
+  const [profileForm, setProfileForm] = useState({ name: '', password: '', serviceNumber: '' });
   const [isUpdatingProfile, setIsUpdatingProfile] = useState(false);
   const [selectedNotifications, setSelectedNotifications] = useState<number[]>([]);
   const [isEditMode, setIsEditMode] = useState(false);
   const [notificationsEnabled, setNotificationsEnabled] = useState(false);
   const [canInstallPwa, setCanInstallPwa] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [dutyPrices, setDutyPrices] = useState({ weekday: 30000, weekend: 100000 });
+
+  // Confirmation dialog states
+  const [confirmState, setConfirmState] = useState<{
+    open: boolean;
+    title: string;
+    description: string;
+    onConfirm: () => void;
+    variant: 'default' | 'destructive';
+  }>({
+    open: false,
+    title: '',
+    description: '',
+    onConfirm: () => {},
+    variant: 'default'
+  });
+
+  // Memoized Calendar Calculations
+  const daysInMonthList = useMemo(() => {
+    const year = currentDate.getFullYear();
+    const month = currentDate.getMonth();
+    const firstDay = new Date(year, month, 1);
+    const lastDay = new Date(year, month + 1, 0);
+    const totalDays = lastDay.getDate();
+    const startingDayOfWeek = firstDay.getDay();
+    const result = [];
+    for (let i = 0; i < startingDayOfWeek; i++) result.push(null);
+    for (let i = 1; i <= totalDays; i++) result.push(i);
+    return result;
+  }, [currentDate]);
+
+  const dutyMap = useMemo(() => {
+    const map = new Map<number, Duty & { isMyDuty: boolean }>();
+    duties.forEach(d => {
+      map.set(d.date, { ...d, isMyDuty: d.userId === currentUser?.id });
+    });
+    return map;
+  }, [duties, currentUser?.id]);
+
+  const myMonthlyStats = useMemo(() => {
+    if (!currentUser) return { weekday: 0, weekend: 0, total: 0 };
+    let weekday = 0;
+    let weekend = 0;
+    duties.forEach(d => {
+      if (d.userId === currentUser.id) {
+        if (d.type === 'weekend') weekend++;
+        else weekday++;
+      }
+    });
+    return {
+      weekday,
+      weekend,
+      total: (weekday * dutyPrices.weekday) + (weekend * dutyPrices.weekend)
+    };
+  }, [duties, currentUser, dutyPrices]);
 
   useEffect(() => {
     loadUserData();
+    loadPrices();
     if ("Notification" in window) {
       setNotificationsEnabled(Notification.permission === "granted");
     }
@@ -119,6 +238,15 @@ export default function Dashboard() {
     window.addEventListener('beforeinstallprompt', () => setCanInstallPwa(true));
     return () => window.removeEventListener('beforeinstallprompt', () => setCanInstallPwa(true));
   }, []);
+
+  const loadPrices = async () => {
+    try {
+      const prices = await api.getDutyPrices();
+      setDutyPrices(prices);
+    } catch (error) {
+      console.error('Failed to load prices:', error);
+    }
+  };
 
   const handleInstallPwa = async () => {
     const installed = await presentPwaInstall();
@@ -171,7 +299,7 @@ export default function Dashboard() {
       const session = await api.getSession();
       
       if (!session) {
-        navigate('/');
+        startNavigation('/', navigate);
         return;
       }
 
@@ -183,7 +311,7 @@ export default function Dashboard() {
       } catch (userError: any) {
         console.error('Failed to load current user:', userError);
         await api.logout();
-        navigate('/');
+        startNavigation('/', navigate);
         return;
       }
 
@@ -194,7 +322,7 @@ export default function Dashboard() {
         setUsers([]);
       }
     } catch (error: any) {
-      navigate('/');
+      startNavigation('/', navigate);
     } finally {
       setLoading(false);
     }
@@ -236,35 +364,24 @@ export default function Dashboard() {
     if (solarHolidays.includes(`${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`)) return true;
     const holidays = [
       '2025-01-28', '2025-01-29', '2025-01-30', '2025-03-03', '2025-05-06', '2025-10-05', '2025-10-06', '2025-10-07', '2025-10-08',
-      '2026-02-16', '2026-02-17', '2026-02-18', '2026-03-02', '2026-05-24', '2026-05-25', '2026-08-17', '2026-09-24', '2026-09-25', '2026-09-26', '2026-10-05'
+      '2026-02-16', '2026-02-17', '2026-02-18', '2026-03-02', '2026-05-24', '2026-05-25', '2026-06-03', '2026-08-17', '2026-09-24', '2026-09-25', '2026-09-26', '2026-10-05'
     ];
+    
+    // Check if the duty for this day is marked as a custom holiday
+    const duty = duties.find(d => d.date === day);
+    if (duty?.isHoliday) return true;
+
     return holidays.includes(dateStr);
   };
 
-  const getDaysInMonth = () => {
-    const year = currentDate.getFullYear();
-    const month = currentDate.getMonth();
-    const firstDay = new Date(year, month, 1);
-    const lastDay = new Date(year, month + 1, 0);
-    const daysInMonth = lastDay.getDate();
-    const startingDayOfWeek = firstDay.getDay();
-    const days = [];
-    for (let i = 0; i < startingDayOfWeek; i++) days.push(null);
-    for (let i = 1; i <= daysInMonth; i++) days.push(i);
-    return days;
-  };
-
-  const getDutyForDate = (date: number | null) => {
-    if (!date) return null;
-    return duties.find((d) => d.date === date);
-  };
-
   const previousMonth = () => {
+    setDirection(-1);
     setCurrentDate(new Date(currentDate.getFullYear(), currentDate.getMonth() - 1));
     setSelectedDate(null);
   };
 
   const nextMonth = () => {
+    setDirection(1);
     setCurrentDate(new Date(currentDate.getFullYear(), currentDate.getMonth() + 1));
     setSelectedDate(null);
   };
@@ -275,7 +392,7 @@ export default function Dashboard() {
       return;
     }
 
-    const duty = getDutyForDate(selectedDate);
+    const duty = selectedDate ? dutyMap.get(selectedDate) : null;
     if (!duty) return;
 
     const toUserId = duty.userId === currentUser.id ? selectedUserId : duty.userId;
@@ -313,7 +430,8 @@ export default function Dashboard() {
     try {
       await api.updateMe(token, {
         name: profileForm.name,
-        password: profileForm.password || undefined
+        password: profileForm.password || undefined,
+        serviceNumber: profileForm.serviceNumber || undefined
       });
       toast.success('프로필이 업데이트되었습니다.');
       setEditProfileMode(false);
@@ -349,16 +467,23 @@ export default function Dashboard() {
 
   const handleDeleteAll = async () => {
     if (!token) return;
-    if (!confirm('모든 알림을 삭제하시겠습니까?')) return;
-    try {
-      await api.deleteNotifications(token, [], true);
-      toast.success('모든 알림이 삭제되었습니다.');
-      setSelectedNotifications([]);
-      setIsEditMode(false);
-      loadNotifications();
-    } catch (error: any) {
-      toast.error('알림 삭제 실패');
-    }
+    setConfirmState({
+      open: true,
+      title: '모든 알림 삭제',
+      description: '정말로 모든 알림을 삭제하시겠습니까? 삭제된 알림은 복구할 수 없습니다.',
+      variant: 'destructive',
+      onConfirm: async () => {
+        try {
+          await api.deleteNotifications(token, [], true);
+          toast.success('모든 알림이 삭제되었습니다.');
+          setSelectedNotifications([]);
+          setIsEditMode(false);
+          loadNotifications();
+        } catch (error: any) {
+          toast.error('알림 삭제 실패');
+        }
+      }
+    });
   };
 
   const unreadCount = notifications.filter((n) => !n.read).length;
@@ -376,7 +501,7 @@ export default function Dashboard() {
     );
   }
 
-  const selectedDuty = getDutyForDate(selectedDate);
+  const selectedDuty = selectedDate ? dutyMap.get(selectedDate) : null;
 
   return (
     <div className="min-h-screen bg-gray-50 pb-20 select-none touch-pan-y">
@@ -392,11 +517,14 @@ export default function Dashboard() {
 
       {/* Header */}
       <div className="sticky top-0 z-40 bg-white/80 backdrop-blur-xl border-b border-gray-100 px-6 py-4 flex items-center justify-between pt-14">
-        <div className="flex items-center space-x-2 active:scale-95 transition-transform" onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}>
+        <div className="flex items-center space-x-3 active:scale-95 transition-transform" onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}>
           <div className="p-2 bg-indigo-600 rounded-xl shadow-lg shadow-indigo-100">
             <CalendarDays className="w-5 h-5 text-white" />
           </div>
-          <h1 className="text-xl font-black text-gray-900 tracking-tight">공당</h1>
+          <div className="flex flex-col items-start">
+            <h1 className="text-xl font-black text-gray-900 tracking-tight leading-tight">공당</h1>
+            <span className="text-[9px] font-bold text-gray-400 -mt-0.5 tracking-tighter">Product by wonmin</span>
+          </div>
         </div>
         <div className="flex items-center space-x-3">
             {canInstallPwa && (
@@ -411,7 +539,7 @@ export default function Dashboard() {
                   {unreadCount > 0 && <span className="absolute top-2 right-2 w-2 h-2 bg-indigo-600 rounded-full ring-2 ring-white" />}
                 </button>
               </DialogTrigger>
-              <DialogContent className="sm:max-w-md w-[95vw] rounded-3xl p-0 overflow-hidden bg-white">
+              <DialogContent className="sm:max-w-md w-[95vw] rounded-3xl p-0 overflow-hidden bg-white top-[40%]">
                  <DialogHeader className="p-5 border-b border-gray-100 bg-white flex flex-row items-center justify-between">
                   <div className="space-y-0.5">
                     <DialogTitle className="text-lg font-bold">알림 센터</DialogTitle>
@@ -494,122 +622,141 @@ export default function Dashboard() {
                 )}
               </DialogContent>
             </Dialog>
-            <Dialog open={profileDialogOpen} onOpenChange={(open) => {
+            <Popover open={profileDialogOpen} onOpenChange={(open) => {
               setProfileDialogOpen(open);
               if (open && currentUser) {
-                setProfileForm({ name: currentUser.name, password: '' });
+                setProfileForm({ 
+                  name: currentUser.name, 
+                  password: '', 
+                  serviceNumber: currentUser.serviceNumber || '' 
+                });
                 setEditProfileMode(false);
               }
             }}>
-              <DialogTrigger asChild>
-                <button className="w-9 h-9 bg-indigo-50 rounded-full flex items-center justify-center border border-indigo-100 shadow-sm active:scale-95 transition-transform cursor-pointer overflow-hidden">
+              <PopoverTrigger asChild>
+                <button className="w-9 h-9 bg-indigo-50 rounded-full flex items-center justify-center border border-indigo-100 shadow-sm active:scale-95 transition-transform cursor-pointer overflow-hidden ring-2 ring-transparent hover:ring-indigo-200">
                   <div className="w-full h-full flex items-center justify-center font-bold text-indigo-600 text-xs">
                     {currentUser?.name.charAt(0)}
                   </div>
                 </button>
-              </DialogTrigger>
-              <DialogContent className="sm:max-w-md w-[95vw] rounded-3xl p-0 overflow-hidden bg-white">
-                <DialogHeader className="sr-only">
-                  <DialogTitle>프로필 설정</DialogTitle>
-                  <DialogDescription>사용자 프로필 정보를 확인하고 수정합니다.</DialogDescription>
-                </DialogHeader>
-                <div className="bg-gradient-to-br from-indigo-600 to-indigo-700 p-8 text-white relative">
+              </PopoverTrigger>
+              <PopoverContent align="end" sideOffset={8} className="w-[85vw] sm:w-80 rounded-3xl p-0 overflow-hidden bg-white border-none shadow-2xl animate-in zoom-in-95 duration-200 origin-top-right">
+                <div className="bg-gradient-to-br from-indigo-600 to-indigo-700 p-6 text-white relative">
                    <div className="flex flex-col items-center text-center">
-                      <div className="w-20 h-20 bg-white/20 backdrop-blur-md rounded-3xl flex items-center justify-center mb-4 ring-4 ring-white/10">
-                        <UserIcon className="w-10 h-10 text-white" />
+                      <div className="w-16 h-16 bg-white/20 backdrop-blur-md rounded-2xl flex items-center justify-center mb-3 ring-4 ring-white/10">
+                        <UserIcon className="w-8 h-8 text-white" />
                       </div>
-                      <h3 className="text-xl font-bold mb-1">{currentUser?.name}</h3>
-                      <div className="flex items-center gap-1.5 px-3 py-1 bg-white/10 rounded-full text-[10px] font-bold uppercase tracking-wider">
-                         <Shield className="w-3 h-3" />
+                      <h3 className="text-lg font-bold mb-0.5">{currentUser?.name}</h3>
+                      <p className="text-[9px] font-black tracking-widest text-white/60 mb-2">{currentUser?.serviceNumber || '군번 미등록'}</p>
+                      <div className="flex items-center gap-1.2 px-2.5 py-0.5 bg-white/10 rounded-full text-[9px] font-bold uppercase tracking-wider">
+                         <Shield className="w-2.5 h-2.5" />
                          {currentUser?.role === 'admin' ? '관리자' : '일반 대원'}
                       </div>
                    </div>
                 </div>
 
-                <div className="p-6 space-y-4 bg-white">
+                <div className="p-4 space-y-3 bg-white">
                   {editProfileMode ? (
-                    <div className="space-y-4 animate-in fade-in slide-in-from-top-2 duration-300">
-                      <div className="space-y-1.5">
-                         <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest ml-1">이름</label>
+                    <div className="space-y-3 animate-in fade-in slide-in-from-top-2 duration-300">
+                      <div className="space-y-1">
+                         <label className="text-[9px] font-bold text-gray-400 uppercase tracking-widest ml-1">이름</label>
                          <Input 
                            value={profileForm.name} 
                            onChange={(e) => setProfileForm({...profileForm, name: e.target.value})}
-                           className="h-12 rounded-xl border-gray-100 bg-gray-50 focus:ring-indigo-500"
+                           className="h-10 rounded-xl border-gray-100 bg-gray-50 focus:ring-indigo-500 text-sm"
                            placeholder="변경할 이름을 입력하세요"
                          />
                       </div>
-                      <div className="space-y-1.5">
-                         <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest ml-1">새 비밀번호 (선택)</label>
+                        <div className="space-y-1">
+                           <label className="text-[9px] font-bold text-gray-400 uppercase tracking-widest ml-1">군번</label>
+                           <Input 
+                             value={profileForm.serviceNumber} 
+                             onChange={(e) => {
+                               const val = e.target.value.replace(/[^0-9]/g, '');
+                               let formatted = val;
+                               if (val.length > 2) {
+                                 formatted = val.slice(0, 2) + '-' + val.slice(2, 8);
+                               }
+                               setProfileForm({...profileForm, serviceNumber: formatted});
+                             }}
+                             className="h-10 rounded-xl border-gray-100 bg-gray-50 focus:ring-indigo-500 font-mono text-sm"
+                             placeholder="00-000000"
+                           />
+                        </div>
+                      <div className="space-y-1">
+                         <label className="text-[9px] font-bold text-gray-400 uppercase tracking-widest ml-1">새 비밀번호 (선택)</label>
                          <Input 
                            type="password"
                            value={profileForm.password} 
                            onChange={(e) => setProfileForm({...profileForm, password: e.target.value})}
-                           className="h-12 rounded-xl border-gray-100 bg-gray-50 focus:ring-indigo-500"
+                           className="h-10 rounded-xl border-gray-100 bg-gray-50 focus:ring-indigo-500 text-sm"
                            placeholder="변경 시에만 입력"
                          />
                       </div>
-                      <div className="flex gap-2 pt-2">
-                        <Button onClick={handleProfileUpdate} disabled={isUpdatingProfile} className="flex-1 h-12 rounded-xl bg-indigo-600 font-bold text-white">
-                          <Save className="w-4 h-4 mr-2" /> {isUpdatingProfile ? '저장 중...' : '변경사항 저장'}
+                      <div className="flex gap-2 pt-1">
+                        <Button onClick={handleProfileUpdate} disabled={isUpdatingProfile} size="sm" className="flex-1 h-10 rounded-xl bg-indigo-600 font-bold text-white text-xs">
+                          <Save className="w-3.5 h-3.5 mr-1.5" /> {isUpdatingProfile ? '저장' : '저장'}
                         </Button>
-                        <Button variant="ghost" onClick={() => setEditProfileMode(false)} className="h-12 rounded-xl text-gray-400 px-6">취소</Button>
+                        <Button variant="ghost" size="sm" onClick={() => setEditProfileMode(false)} className="h-10 rounded-xl text-gray-400 px-4 text-xs">취소</Button>
                       </div>
                     </div>
                   ) : (
-                    <div className="space-y-2">
+                    <div className="space-y-1">
                        <Button 
                          variant="ghost" 
                          onClick={() => setEditProfileMode(true)}
-                         className="w-full h-14 justify-start px-4 rounded-2xl hover:bg-gray-50 text-gray-700 font-bold group"
+                         className="w-full h-12 justify-start px-3 rounded-2xl hover:bg-gray-50 text-gray-700 font-bold group text-sm"
                        >
-                         <Settings className="w-5 h-5 mr-3 text-gray-400 group-hover:text-indigo-600 transition-colors" /> 프로필 수정
+                         <SettingsIcon className="w-4 h-4 mr-3 text-gray-400 group-hover:text-indigo-600 transition-colors" /> 프로필 수정
                        </Button>
                        <Button 
                          variant="ghost" 
                          onClick={handleRefresh}
                          disabled={isRefreshing}
-                         className="w-full h-14 justify-start px-4 rounded-2xl hover:bg-gray-50 text-gray-700 font-bold group"
+                         className="w-full h-12 justify-start px-3 rounded-2xl hover:bg-gray-50 text-gray-700 font-bold group text-sm"
                        >
-                         <RefreshCw className={`w-5 h-5 mr-3 text-gray-400 group-hover:text-indigo-600 transition-colors ${isRefreshing ? 'animate-spin' : ''}`} /> 데이터 새로고침
+                         <RefreshCw className={`w-4 h-4 mr-3 text-gray-400 group-hover:text-indigo-600 transition-colors ${isRefreshing ? 'animate-spin' : ''}`} /> 데이터 새로고침
                        </Button>
+                       {currentUser?.role === 'admin' && (
+                         <Button 
+                           variant="ghost" 
+                           onClick={() => startNavigation('/admin', navigate)}
+                           className="w-full h-12 justify-start px-3 rounded-2xl hover:bg-gray-50 text-indigo-600 font-bold group text-sm"
+                         >
+                           <ShieldCheck className="w-4 h-4 mr-3" /> 관리자 도구
+                         </Button>
+                       )}
                        <Button 
                          variant="ghost" 
                          onClick={async () => {
-                           if (confirm('모든 로컬 캐시와 데이터를 삭제하고 앱을 초기화하시겠습니까? (로그인이 필요할 수 있습니다)')) {
-                             // 1. Clear Storage
+                           if (confirm('모든 로컬 캐시와 데이터를 삭제하고 앱을 초기화하시겠습니까?')) {
                              localStorage.clear();
                              sessionStorage.clear();
-                             
-                             // 2. Clear Caches
                              const cacheNames = await caches.keys();
                              await Promise.all(cacheNames.map(name => caches.delete(name)));
-                             
-                             // 3. Unregister SW
                              const registrations = await navigator.serviceWorker.getRegistrations();
-                             for(let registration of registrations) {
-                               await registration.unregister();
-                             }
-                             
-                             toast.success('캐시가 삭제되었습니다. 앱을 재시작합니다.');
-                             setTimeout(() => window.location.reload(), 1500);
+                             for(let registration of registrations) await registration.unregister();
+                             toast.success('초기화되었습니다.');
+                             setTimeout(() => window.location.reload(), 1000);
                            }
                          }}
-                         className="w-full h-14 justify-start px-4 rounded-2xl hover:bg-orange-50 text-orange-600 font-bold group"
+                         className="w-full h-12 justify-start px-3 rounded-2xl hover:bg-orange-50 text-orange-600 font-bold group text-sm"
                        >
-                         <Trash2 className="w-5 h-5 mr-3 text-orange-400 group-hover:text-orange-600 transition-colors" /> 캐시 및 데이터 초기화
+                         <Trash2 className="w-4 h-4 mr-3 text-orange-400 group-hover:text-orange-600 transition-colors" /> 앱 데이터 초기화
                        </Button>
+                       <div className="h-px bg-gray-100 my-1 mx-2" />
                        <Button 
                          variant="ghost" 
-                         onClick={api.logout} 
-                         className="w-full h-14 justify-start px-4 rounded-2xl hover:bg-red-50 text-red-500 font-bold group"
+                         onClick={api.logout}
+                         className="w-full h-12 justify-start px-3 rounded-2xl hover:bg-red-50 text-red-500 font-bold group text-sm"
                        >
-                         <LogOut className="w-5 h-5 mr-3 text-red-400 group-hover:text-red-500 transition-colors" /> 로그아웃
+                         <LogOut className="w-4 h-4 mr-3" /> 로그아웃
                        </Button>
                     </div>
                   )}
                 </div>
-              </DialogContent>
-            </Dialog>
+              </PopoverContent>
+            </Popover>
         </div>
       </div>
 
@@ -624,7 +771,7 @@ export default function Dashboard() {
           <div className="flex items-center justify-between bg-white p-2 rounded-2xl border border-gray-100 shadow-sm">
             <button onClick={previousMonth} className="w-10 h-10 flex items-center justify-center text-gray-400 hover:text-indigo-600 active:scale-95 transition-all"><ChevronLeft className="w-6 h-6" /></button>
             <div className="flex flex-col items-center">
-              <span className="text-xs font-black text-indigo-600 uppercase tracking-widest">{currentDate.getFullYear()}년 v0.7.5</span>
+              <span className="text-xs font-black text-indigo-600 uppercase tracking-widest">{currentDate.getFullYear()}년 v1.1.2</span>
               <span className="text-lg font-bold text-gray-900">{currentDate.getMonth() + 1}월</span>
             </div>
             <button onClick={nextMonth} className="w-10 h-10 flex items-center justify-center text-gray-400 hover:text-indigo-600 active:scale-95 transition-all"><ChevronRight className="w-6 h-6" /></button>
@@ -632,37 +779,36 @@ export default function Dashboard() {
 
           {/* Calendar Card */}
           <Card className="border-none shadow-xl rounded-3xl bg-white overflow-hidden">
-            <CardContent className="p-4">
+            <CardContent className="p-4 min-h-[340px] flex flex-col">
               <div className="grid grid-cols-7 mb-4">
                 {['일', '월', '화', '수', '목', '금', '토'].map((day, i) => (
                   <span key={i} className={`text-[10px] font-black text-center uppercase tracking-widest ${i === 0 ? 'text-red-400' : i === 6 ? 'text-blue-400' : 'text-gray-400'}`}>{day}</span>
                 ))}
               </div>
-              <div className="grid grid-cols-7 gap-1.5">
-                {getDaysInMonth().map((day, index) => {
-                  const duty = getDutyForDate(day);
-                  const isSelected = selectedDate === day;
-                  const isToday = day === new Date().getDate() && currentDate.getMonth() === new Date().getMonth() && currentDate.getFullYear() === new Date().getFullYear();
-                  const isMyDuty = duty?.userId === currentUser?.id;
-
-                  return (
-                    <div
-                      key={index}
-                      className={`aspect-square flex flex-col items-center justify-center rounded-xl transition-all relative ${!day ? 'invisible' : 'cursor-pointer'} ${isSelected ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-200' : isToday ? 'bg-indigo-50 text-indigo-700 ring-1 ring-inset ring-indigo-200' : 'hover:bg-gray-50'}`}
-                      onClick={() => day && setSelectedDate(day)}
+              <div className="relative flex-1">
+                <AnimatePresence initial={false} mode="popLayout">
+                    <motion.div
+                      key={`${currentDate.getFullYear()}-${currentDate.getMonth()}`}
+                      initial={{ x: direction > 0 ? 50 : -50, opacity: 0 }}
+                      animate={{ x: 0, opacity: 1 }}
+                      exit={{ x: direction > 0 ? -50 : 50, opacity: 0 }}
+                      transition={{ type: "spring", stiffness: 500, damping: 40 }}
+                      className="grid grid-cols-7 gap-1.5"
                     >
-                      {day && (
-                        <>
-                          <span className={`text-sm font-bold ${isSelected ? 'text-white' : (index % 7 === 0 || isKoreanHoliday(currentDate.getFullYear(), currentDate.getMonth() + 1, day)) ? 'text-red-500' : index % 7 === 6 ? 'text-blue-500' : 'text-gray-700'}`}>{day}</span>
-                          {duty && !isSelected && (
-                            <div className={`w-1.5 h-1.5 rounded-full mt-1 ${isMyDuty ? 'bg-orange-500 animate-pulse' : duty.type === 'weekend' ? 'bg-red-400' : 'bg-gray-300'}`} />
-                          )}
-                          {isSelected && duty && <div className="absolute -bottom-1 w-1 h-1 bg-white rounded-full" />}
-                        </>
-                      )}
-                    </div>
-                  );
-                })}
+                      {daysInMonthList.map((day, index) => (
+                        <CalendarDay
+                          key={index}
+                          index={index}
+                          day={day}
+                          duty={day ? dutyMap.get(day) : null}
+                          isSelected={selectedDate === day}
+                          isToday={day === new Date().getDate() && currentDate.getMonth() === new Date().getMonth() && currentDate.getFullYear() === new Date().getFullYear()}
+                          isHoliday={day ? isKoreanHoliday(currentDate.getFullYear(), currentDate.getMonth() + 1, day) : false}
+                          onClick={(d) => setSelectedDate(d)}
+                        />
+                      ))}
+                    </motion.div>
+                </AnimatePresence>
               </div>
             </CardContent>
           </Card>
@@ -684,63 +830,120 @@ export default function Dashboard() {
             <CardContent className="p-4">
               {selectedDate ? (
                 (() => {
+                  const selectedDuty = dutyMap.get(selectedDate);
                   return selectedDuty ? (
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center space-x-3">
-                        <div className="w-10 h-10 bg-gray-100 rounded-full flex items-center justify-center font-bold text-gray-600">{selectedDuty.userName.charAt(0)}</div>
-                        <div>
-                          <p className="text-xs text-gray-400 font-medium">담당자</p>
-                          <p className="text-sm font-bold text-gray-900">{selectedDuty.userName}</p>
+                    <>
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center space-x-3">
+                          <div className="w-10 h-10 bg-gray-100 rounded-full flex items-center justify-center font-bold text-gray-600">{selectedDuty.userName.charAt(0)}</div>
+                          <div>
+                            <p className="text-xs text-gray-400 font-medium">근무자</p>
+                            <p className="text-sm font-bold text-gray-900">{selectedDuty.userName}</p>
+                          </div>
+                        </div>
+                        <div className="flex flex-col items-end">
+                          <p className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">예상 수당</p>
+                          <p className="text-sm font-black text-indigo-600">
+                            {selectedDuty.type === 'weekend' 
+                              ? dutyPrices.weekend.toLocaleString() 
+                              : dutyPrices.weekday.toLocaleString()}원
+                          </p>
                         </div>
                       </div>
-                      <div className="flex items-center gap-2">
-                        {selectedDuty.userId === currentUser?.id && <Badge className="bg-orange-500 text-white">내 당직</Badge>}
-                        <Dialog open={swapDialogOpen} onOpenChange={setSwapDialogOpen}>
-                          <DialogTrigger asChild>
-                            <Button size="sm" variant="outline" className="rounded-xl text-xs h-8">교환 요청</Button>
-                          </DialogTrigger>
-                          <DialogContent className="sm:max-w-md w-[90vw] rounded-3xl p-6 bg-white border border-gray-100 shadow-2xl">
-                            <DialogHeader>
-                              <DialogTitle className="text-xl font-bold">당직 교환 요청</DialogTitle>
-                              <DialogDescription>{selectedDate}일 당직을 교환할 사용자를 선택하세요.</DialogDescription>
-                            </DialogHeader>
-                            <div className="space-y-6 py-4">
-                              <div className="space-y-2">
-                                <Label className="text-xs font-bold uppercase tracking-wider text-gray-500">
-                                  {selectedDuty.userId === currentUser?.id ? '이 당직을 맡을 사람' : '이 당직을 요청할 사람 (본인)'}
-                                </Label>
-                                <Select value={selectedUserId} onValueChange={setSelectedUserId}>
-                                  <SelectTrigger className="h-12 rounded-xl border-gray-100 bg-gray-50"><SelectValue placeholder="사용자 선택" /></SelectTrigger>
-                                  <SelectContent className="rounded-2xl border-gray-100 shadow-xl bg-white">
-                                    {selectedDuty.userId === currentUser?.id ? (
-                                      users.filter(u => u.id !== currentUser?.id).map(user => (
-                                        <SelectItem key={user.id} value={user.id} className="rounded-lg">{user.name} ({user.email})</SelectItem>
-                                      ))
-                                    ) : (
-                                      <SelectItem key={currentUser?.id} value={currentUser?.id || 'me'} className="rounded-lg">{currentUser?.name} (본인)</SelectItem>
-                                    )}
-                                  </SelectContent>
-                                </Select>
+                      <div className="mt-4 pt-4 border-t border-gray-50 flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          {selectedDuty.userId === currentUser?.id && <Badge className="bg-orange-500 text-white rounded-lg px-2 py-0.5 text-[10px]">내 당직</Badge>}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Dialog open={swapDialogOpen} onOpenChange={setSwapDialogOpen}>
+                            <DialogTrigger asChild>
+                              <Button size="sm" variant="outline" className="rounded-xl text-xs h-8">교환 요청</Button>
+                            </DialogTrigger>
+                            <DialogContent className="sm:max-w-md w-[90vw] rounded-3xl p-6 bg-white border border-gray-100 shadow-2xl top-[40%]">
+                              <DialogHeader>
+                                <DialogTitle className="text-xl font-bold">당직 교환 요청</DialogTitle>
+                                <DialogDescription>{selectedDate}일 당직을 교환할 사용자를 선택하세요.</DialogDescription>
+                              </DialogHeader>
+                              <div className="space-y-6 py-4">
+                                <div className="space-y-2">
+                                  <Label className="text-xs font-bold uppercase tracking-wider text-gray-500">
+                                    {selectedDuty.userId === currentUser?.id ? '이 당직을 맡을 사람' : '이 당직을 요청할 사람 (본인)'}
+                                  </Label>
+                                  <Select value={selectedUserId} onValueChange={setSelectedUserId}>
+                                    <SelectTrigger className="h-12 rounded-xl border-gray-100 bg-gray-50"><SelectValue placeholder="사용자 선택" /></SelectTrigger>
+                                    <SelectContent className="rounded-2xl border-gray-100 shadow-xl bg-white">
+                                      {selectedDuty.userId === currentUser?.id ? (
+                                        users.filter(u => u.id !== currentUser?.id).map(user => (
+                                          <SelectItem key={user.id} value={user.id} className="rounded-lg">{user.name} ({user.email})</SelectItem>
+                                        ))
+                                      ) : (
+                                        <SelectItem key={currentUser?.id} value={currentUser?.id || 'me'} className="rounded-lg">{currentUser?.name} (본인)</SelectItem>
+                                      )}
+                                    </SelectContent>
+                                  </Select>
+                                </div>
+                                <div className="flex flex-col space-y-2">
+                                  <Button onClick={handleSwapRequest} className="h-12 rounded-xl bg-indigo-600 font-bold text-white">요청 보내기</Button>
+                                  <Button variant="ghost" onClick={() => setSwapDialogOpen(false)} className="h-12 rounded-xl text-gray-500 font-medium">취소</Button>
+                                </div>
                               </div>
-                              <div className="flex flex-col space-y-2">
-                                <Button onClick={handleSwapRequest} className="h-12 rounded-xl bg-indigo-600 font-bold text-white">요청 보내기</Button>
-                                <Button variant="ghost" onClick={() => setSwapDialogOpen(false)} className="h-12 rounded-xl text-gray-500 font-medium">취소</Button>
-                              </div>
-                            </div>
-                          </DialogContent>
-                        </Dialog>
+                            </DialogContent>
+                          </Dialog>
+                        </div>
                       </div>
-                    </div>
+                    </>
                   ) : <div className="py-4 text-center"><p className="text-sm text-gray-400">배정된 당직이 없습니다.</p></div>
                 })()
               ) : <p className="text-sm text-center text-gray-400 py-4 font-medium">캘린더에서 날짜를 터치하여 정보를 확인하세요.</p>}
             </CardContent>
           </Card>
 
+          {/* Monthly Settlement Card */}
+          <Card className="border-none shadow-xl rounded-3xl bg-indigo-600 overflow-hidden text-white relative">
+            <div className="absolute top-0 right-0 p-6 opacity-10">
+              <Wallet className="w-20 h-20 rotate-12" />
+            </div>
+            <CardContent className="p-6 relative z-10">
+              <div className="flex items-center gap-2 mb-4">
+                <div className="w-8 h-8 bg-white/20 backdrop-blur-md rounded-lg flex items-center justify-center">
+                  <Wallet className="w-4 h-4 text-white" />
+                </div>
+                <h3 className="text-base font-bold tracking-tight">월간 당직비 결산</h3>
+              </div>
+              <div className="space-y-1">
+                <p className="text-xs text-white/70 font-medium">
+                  {currentDate.getMonth() + 1}월 정산 (평일 { (dutyPrices.weekday / 10000).toFixed(1) }, 주말 { (dutyPrices.weekend / 10000).toFixed(1) })
+                </p>
+                <div className="flex items-baseline gap-2">
+                  <span className="text-2xl font-black">{myMonthlyStats.total.toLocaleString()}원</span>
+                  <span className="text-xs font-bold text-white/80">지급예정</span>
+                </div>
+              </div>
+              <div className="mt-4 pt-4 border-t border-white/10 flex items-center justify-between">
+                <div className="flex gap-4">
+                  <div className="flex flex-col">
+                    <span className="text-[10px] font-bold text-white/60 uppercase">평일 근무</span>
+                    <span className="text-sm font-black">{myMonthlyStats.weekday}회</span>
+                  </div>
+                  <div className="flex flex-col">
+                    <span className="text-[10px] font-bold text-white/60 uppercase">주말 근무</span>
+                    <span className="text-sm font-black">{myMonthlyStats.weekend}회</span>
+                  </div>
+                </div>
+                <div className="px-3 py-1 bg-white/10 rounded-full text-[10px] font-black uppercase tracking-wider">
+                  Total {myMonthlyStats.weekday + myMonthlyStats.weekend}회
+                </div>
+              </div>
+              <p className="mt-4 text-[10px] font-bold text-white/50 bg-black/10 p-2 rounded-xl text-center">
+                {currentDate.getMonth() + 1}월에는 평일 {myMonthlyStats.weekday}회, 주말 {myMonthlyStats.weekend}회 총 {myMonthlyStats.total.toLocaleString()}원 지급예정
+              </p>
+            </CardContent>
+          </Card>
+
           {/* Quick Actions (Admin Only) */}
           {currentUser?.role === 'admin' && (
-            <Button variant="default" className="w-full bg-indigo-600 hover:bg-indigo-700 h-14 rounded-2xl shadow-xl shadow-indigo-100 font-bold text-white" onClick={() => navigate('/generate')}>
-              <Settings className="w-5 h-5 mr-2" />당직 자동 생성 도구
+            <Button variant="default" className="w-full bg-indigo-600 hover:bg-indigo-700 h-14 rounded-2xl shadow-xl shadow-indigo-100 font-bold text-white" onClick={() => startNavigation('/admin', navigate)}>
+              <SettingsIcon className="w-5 h-5 mr-2" />당직 자동 생성 도구
             </Button>
           )}
         </div>
@@ -752,7 +955,7 @@ export default function Dashboard() {
           <CalendarIcon className="w-6 h-6" />
           <span className="text-[10px] font-black uppercase tracking-tight">당직일정</span>
         </button>
-        <button onClick={() => navigate('/swap-requests')} className="flex flex-col items-center justify-center space-y-1.5 text-gray-400 hover:text-indigo-500 active:scale-90 transition-all flex-1 relative">
+        <button onClick={() => startNavigation('/swap-requests', navigate)} className="flex flex-col items-center justify-center space-y-1.5 text-gray-400 hover:text-indigo-500 active:scale-90 transition-all flex-1 relative">
           <div className="relative">
             <ArrowLeftRight className="w-6 h-6" />
             {hasPendingSwaps && <span className="absolute -top-1 -right-1 w-3.5 h-3.5 bg-red-500 rounded-full ring-2 ring-white animate-pulse" />}
@@ -760,12 +963,21 @@ export default function Dashboard() {
           <span className="text-[10px] font-black uppercase tracking-tight">당직교환</span>
         </button>
         {currentUser?.role === 'admin' && (
-          <button onClick={() => navigate('/generate')} className="flex flex-col items-center justify-center space-y-1.5 text-gray-400 hover:text-indigo-500 active:scale-90 transition-all flex-1">
-            <Settings className="w-6 h-6" />
+          <button onClick={() => startNavigation('/admin', navigate)} className="flex flex-col items-center justify-center space-y-1.5 text-gray-400 hover:text-indigo-500 active:scale-90 transition-all flex-1">
+            <SettingsIcon className="w-6 h-6" />
             <span className="text-[10px] font-black uppercase tracking-tight">관리도구</span>
           </button>
         )}
       </nav>
+
+      <ConfirmDialog 
+        open={confirmState.open}
+        onOpenChange={(open) => setConfirmState({ ...confirmState, open })}
+        title={confirmState.title}
+        description={confirmState.description}
+        onConfirm={confirmState.onConfirm}
+        variant={confirmState.variant}
+      />
     </div>
   );
 }

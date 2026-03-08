@@ -38,8 +38,8 @@ export const api = {
     return response.json();
   },
 
-  async signup(data: { username: string; password?: string; name: string; role: string; securityQuestion: string; securityAnswer: string }) {
-    const { username, password, name, role, securityQuestion, securityAnswer } = data;
+  async signup(data: { username: string; password?: string; name: string; role: string; securityQuestion: string; securityAnswer: string; serviceNumber: string }) {
+    const { username, password, name, role, securityQuestion, securityAnswer, serviceNumber } = data;
     
     // Ensure username is a string
     const stringUsername = typeof username === 'string' ? username : (username as any).username;
@@ -56,7 +56,8 @@ export const api = {
         name, 
         role, 
         securityQuestion, 
-        securityAnswer 
+        securityAnswer,
+        serviceNumber 
       }),
     });
 
@@ -194,7 +195,7 @@ export const api = {
     return response.json();
   },
 
-  async generateDuties(token: string, year: number, month: number, weekdayUsers: string[], weekendUsers: string[]) {
+  async generateDuties(token: string, year: number, month: number, weekdayUsers: string[], weekendUsers: string[], exclusions: { userId: string, startDate: string, endDate: string }[] = [], customHolidays: string[] = []) {
     const response = await fetch(`${API_BASE_URL}/duties/generate`, {
       method: 'POST',
       headers: {
@@ -202,7 +203,7 @@ export const api = {
         'Authorization': `Bearer ${publicAnonKey}`,
         'x-user-token': token
       },
-      body: JSON.stringify({ year, month, weekdayUsers, weekendUsers }),
+      body: JSON.stringify({ year, month, weekdayUsers, weekendUsers, exclusions, customHolidays }),
     });
 
     if (!response.ok) {
@@ -248,7 +249,7 @@ export const api = {
     return response.json();
   },
 
-  async respondToSwapRequest(token: string, requestId: string, action: 'approve' | 'reject') {
+  async respondToSwapRequest(token: string, requestId: string, action: 'approve' | 'reject' | 'cancel') {
     const response = await fetch(`${API_BASE_URL}/swap-requests/${requestId}/${action}`, {
       method: 'POST',
       headers: { 
@@ -353,7 +354,7 @@ export const api = {
     return response.json();
   },
 
-  async updateMe(token: string, data: { name: string, password?: string }) {
+  async updateMe(token: string, data: { name: string, password?: string, serviceNumber?: string }) {
     const response = await fetch(`${API_BASE_URL}/me/update`, {
       method: 'POST',
       headers: {
@@ -403,6 +404,28 @@ export const api = {
       throw new Error(error.error || '일괄 삭제 실패');
     }
 
+    return response.json();
+  },
+
+  async getDutyPrices() {
+    const response = await fetch(`${API_BASE_URL}/settings/duty-prices`, {
+      headers: { 'Authorization': `Bearer ${publicAnonKey}` },
+    });
+    if (!response.ok) throw new Error('단가 정보를 가져오는데 실패했습니다.');
+    return response.json();
+  },
+
+  async updateDutyPrices(token: string, weekday: number, weekend: number) {
+    const response = await fetch(`${API_BASE_URL}/settings/duty-prices`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${publicAnonKey}`,
+        'x-user-token': token
+      },
+      body: JSON.stringify({ weekday, weekend }),
+    });
+    if (!response.ok) throw new Error('단가 수정 실패');
     return response.json();
   },
 };

@@ -62,7 +62,7 @@ app.post('/make-server-a032f464/signup', async (c) => {
     const body = await c.req.json();
     console.log('Signup payload:', JSON.stringify(body));
     
-    let { username, password, name, role = 'user', securityQuestion, securityAnswer } = body;
+    let { username, password, name, role = 'user', securityQuestion, securityAnswer, serviceNumber } = body;
     
     // Defensive check: if username is an object, try to extract string
     if (username && typeof username === 'object') {
@@ -94,7 +94,8 @@ app.post('/make-server-a032f464/signup', async (c) => {
         name, 
         role, 
         securityQuestion, 
-        securityAnswer 
+        securityAnswer,
+        serviceNumber
       },
       email_confirm: true,
     });
@@ -115,7 +116,7 @@ app.post('/make-server-a032f464/signup', async (c) => {
           const retry = await supabaseAdmin.auth.admin.createUser({
             email,
             password,
-            user_metadata: { username, name, role, securityQuestion, securityAnswer },
+            user_metadata: { username, name, role, securityQuestion, securityAnswer, serviceNumber },
             email_confirm: true,
           });
           data = retry.data;
@@ -133,7 +134,7 @@ app.post('/make-server-a032f464/signup', async (c) => {
       return c.json({ error: '사용자 생성에 실패했습니다.' }, 500);
     }
 
-    const userData = { id: data.user.id, username, name, role };
+    const userData = { id: data.user.id, username, name, role, serviceNumber };
     await kv.set(`user:${data.user.id}`, userData);
     
     return c.json({ success: true, user: userData });
@@ -273,6 +274,7 @@ function isKoreanHoliday(year: number, month: number, day: number) {
     '2026-03-02', // Alt for Mar 1
     '2026-05-24', // Buddha's B-day
     '2026-05-25', // Alt for Buddha's B-day
+    '2026-06-03', // Local Election
     '2026-08-17', // Alt for Liberation Day
     '2026-09-24', '2026-09-25', '2026-09-26', // Chuseok
     '2026-10-05', // Alt for Foundation Day
@@ -293,32 +295,81 @@ app.post('/make-server-a032f464/duties/generate', async (c) => {
     const userData = await kv.get(`user:${user.id}`);
     if (userData?.role !== 'admin') return c.json({ error: 'Admin only' }, 403);
 
-    const { year, month, weekdayUsers, weekendUsers } = await c.req.json();
+    const { year, month, weekdayUsers, weekendUsers, exclusions = [], customHolidays = [] } = await c.req.json();
     
     const allUserData = await kv.getByPrefix('user:');
     const userMap = new Map(allUserData.map(u => [u.id, u]));
 
     const daysInMonth = new Date(year, month, 0).getDate();
     const duties = [];
-    let wdIdx = 0, weIdx = 0;
+    
+    // Carry-over pointer logic: Load last indices from KV
+    const lastPointers = await kv.get('duty-pointers') || { wdIdx: 0, weIdx: 0 };
+    let wdIdx = lastPointers.wdIdx || 0;
+    let weIdx = lastPointers.weIdx || 0;
+
+    // Helper to check if a date is a custom holiday
+    const isCustomHoliday = (dateObj: Date) => {
+      const dateStr = `${dateObj.getFullYear()}-${String(dateObj.getMonth() + 1).padStart(2, '0')}-${String(dateObj.getDate()).padStart(2, '0')}`;
+      return customHolidays.includes(dateStr);
+    };
+
+    // Helper to check if user is excluded on a specific date
+    const isExcluded = (userId: string, dateObj: Date) => {
+      return exclusions.some((ex: any) => {
+        if (ex.userId !== userId) return false;
+        const start = new Date(ex.startDate);
+        const end = new Date(ex.endDate);
+        const current = new Date(dateObj);
+        current.setHours(0, 0, 0, 0);
+        start.setHours(0, 0, 0, 0);
+        end.setHours(23, 59, 59, 999);
+        return current >= start && current <= end;
+      });
+    };
 
     for (let d = 1; d <= daysInMonth; d++) {
       const date = new Date(year, month - 1, d);
       const isWeekend = date.getDay() === 0 || date.getDay() === 6;
-      const isHoliday = isKoreanHoliday(year, month, d);
+      const isOfficialHoliday = isKoreanHoliday(year, month, d);
+      const isCustomHoli = isCustomHoliday(date);
+      const isHoliday = isOfficialHoliday || isCustomHoli;
       const isWE = isWeekend || isHoliday;
       
-      const uid = isWE ? weekendUsers[weIdx++ % weekendUsers.length] : weekdayUsers[wdIdx++ % weekdayUsers.length];
-      const uInfo = userMap.get(uid);
+      const sequence = isWE ? weekendUsers : weekdayUsers;
+      let ptr = isWE ? weIdx : wdIdx;
+      
+      if (sequence.length === 0) {
+        duties.push({ date: d, userId: '', userName: '미지정', type: isWE ? 'weekend' : 'weekday', isHoliday });
+        continue;
+      }
+
+      // Find first available person in sequence
+      let attempts = 0;
+      let selectedUid = sequence[ptr % sequence.length];
+      
+      while (isExcluded(selectedUid, date) && attempts < sequence.length) {
+        ptr++;
+        selectedUid = sequence[ptr % sequence.length];
+        attempts++;
+      }
+
+      // Update global pointer for next day
+      if (isWE) weIdx = ptr + 1;
+      else wdIdx = ptr + 1;
+
+      const uInfo = userMap.get(selectedUid);
       duties.push({ 
         date: d, 
-        userId: uid, 
+        userId: selectedUid, 
         userName: uInfo?.name || 'Unknown', 
         type: isWE ? 'weekend' : 'weekday',
         isHoliday: isHoliday
       });
     }
 
+    // Save current pointers to KV for next month's generation
+    await kv.set('duty-pointers', { wdIdx, weIdx });
     await kv.set(`duties:${year}-${month}`, duties);
     return c.json({ success: true, duties });
   } catch (error: any) {
@@ -384,11 +435,40 @@ app.post('/make-server-a032f464/swap-requests/:requestId/:action', async (c) => 
 
   const { requestId, action } = c.req.param();
   const req = await kv.get(`swap-request:${requestId}`);
-  if (!req || req.toUserId !== user.id) return c.json({ error: 'Forbidden' }, 403);
+  if (!req) return c.json({ error: 'Request not found' }, 404);
+
+  // 취소 처리 (보낸 사람만 가능)
+  if (action === 'cancel') {
+    if (req.fromUserId !== user.id) return c.json({ error: '보낸 사람만 취소할 수 있습니다.' }, 403);
+    if (req.status !== 'pending') return c.json({ error: '대기 중인 요청만 취소할 수 있습니다.' }, 400);
+    
+    req.status = 'cancelled';
+    await kv.set(`swap-request:${requestId}`, req);
+    
+    // 받는 사람에게 취소 알림 추가
+    const targetNotifs = (await kv.get(`notifications:${req.toUserId}`)) || [];
+    targetNotifs.push({
+      id: Date.now(),
+      message: `${req.fromUserName}님이 교환 요청을 취소했습니다.`,
+      type: 'swap-cancelled',
+      requestId: requestId,
+      read: false,
+      createdAt: new Date().toISOString()
+    });
+    await kv.set(`notifications:${req.toUserId}`, targetNotifs);
+    
+    return c.json({ success: true, request: req });
+  }
+
+  // 승인/거절 처리 (받는 사람만 가능)
+  if (req.toUserId !== user.id) return c.json({ error: '받는 사람만 처리할 수 있습니다.' }, 403);
+  if (req.status !== 'pending') return c.json({ error: '이미 처리된 요청입니다.' }, 400);
 
   if (action === 'approve') {
     const ds = await kv.get(`duties:${req.year}-${req.month}`);
-    const updated = ds.map(d => {
+    if (!ds) return c.json({ error: '당직 일정을 찾을 수 없습니다.' }, 404);
+    
+    const updated = ds.map((d: any) => {
       if (d.date === req.date) {
         if (d.userId === req.fromUserId) return { ...d, userId: req.toUserId, userName: req.toUserName };
         if (d.userId === req.toUserId) return { ...d, userId: req.fromUserId, userName: req.fromUserName };
@@ -478,19 +558,19 @@ app.post('/make-server-a032f464/users/:userId/role', async (c) => {
   }
 });
 
-// 프로필 수정 (이름, 비밀번호)
+// 프로필 수정 (이름, 비밀번호, 군번)
 app.post('/make-server-a032f464/me/update', async (c) => {
   try {
     const user = await verifyUser(c.req);
     if (!user) return c.json({ error: 'Unauthorized' }, 401);
 
-    const { name, password } = await c.req.json();
+    const { name, password, serviceNumber } = await c.req.json();
     const userData = await kv.get(`user:${user.id}`);
     
     if (!userData) return c.json({ error: 'User not found' }, 404);
 
     const updateData: any = {
-      user_metadata: { ...user.user_metadata, name }
+      user_metadata: { ...user.user_metadata, name, serviceNumber }
     };
     
     if (password) {
@@ -500,7 +580,7 @@ app.post('/make-server-a032f464/me/update', async (c) => {
     const { error: authError } = await supabaseAdmin.auth.admin.updateUserById(user.id, updateData);
     if (authError) throw authError;
 
-    const updatedUser = { ...userData, name };
+    const updatedUser = { ...userData, name, serviceNumber };
     await kv.set(`user:${user.id}`, updatedUser);
 
     return c.json({ success: true, user: updatedUser });
@@ -612,6 +692,30 @@ app.post('/make-server-a032f464/create-duty-notifications', async (c) => {
     }
 
     return c.json({ success: true, message: '당직 알림이 생성되었습니다.' });
+  } catch (error: any) {
+    return c.json({ error: error.message }, 500);
+  }
+});
+
+// 당직비 단가 조회
+app.get('/make-server-a032f464/settings/duty-prices', async (c) => {
+  const prices = await kv.get('settings:duty-prices');
+  return c.json(prices || { weekday: 30000, weekend: 100000 });
+});
+
+// 당직비 단가 수정
+app.post('/make-server-a032f464/settings/duty-prices', async (c) => {
+  try {
+    const user = await verifyUser(c.req);
+    if (!user) return c.json({ error: 'Unauthorized' }, 401);
+
+    const userData = await kv.get(`user:${user.id}`);
+    if (userData?.role !== 'admin') return c.json({ error: 'Admin only' }, 403);
+
+    const { weekday, weekend } = await c.req.json();
+    await kv.set('settings:duty-prices', { weekday: Number(weekday), weekend: Number(weekend) });
+    
+    return c.json({ success: true, message: '단가가 수정되었습니다.' });
   } catch (error: any) {
     return c.json({ error: error.message }, 500);
   }

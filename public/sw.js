@@ -1,4 +1,4 @@
-const CACHE_NAME = 'gong-dang-cache-v0.7.5';
+const CACHE_NAME = 'gong-dang-cache-v1.1.2';
 const ASSETS_TO_CACHE = [
   '/',
   '/index.html',

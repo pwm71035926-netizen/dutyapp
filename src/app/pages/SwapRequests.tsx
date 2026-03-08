@@ -1,6 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useContext } from 'react';
 import { useNavigate } from 'react-router';
 import { api } from '../lib/api';
+import { NavigationContext } from '../context/NavigationContext';
 import { Button } from '../components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
@@ -13,7 +14,7 @@ import {
   ArrowRight, 
   MessageSquare, 
   Calendar as CalendarIcon, 
-  Settings, 
+  Settings as SettingsIcon, 
   LogOut,
   User as UserIcon,
   ChevronRight,
@@ -30,7 +31,7 @@ interface SwapRequest {
   year: number;
   month: number;
   date: number;
-  status: 'pending' | 'approved' | 'rejected';
+  status: 'pending' | 'approved' | 'rejected' | 'cancelled';
   createdAt: string;
 }
 
@@ -41,21 +42,34 @@ interface User {
 
 export default function SwapRequests() {
   const navigate = useNavigate();
+  const { startNavigation } = useContext(NavigationContext);
   const [token, setToken] = useState<string | null>(null);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [requests, setRequests] = useState<SwapRequest[]>([]);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<'received' | 'sent'>('received');
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [dutyPrices, setDutyPrices] = useState({ weekday: 30000, weekend: 100000 });
 
   useEffect(() => {
     loadData();
+    loadPrices();
   }, []);
+
+  const loadPrices = async () => {
+    try {
+      const prices = await api.getDutyPrices();
+      setDutyPrices(prices);
+    } catch (error) {
+      console.error('Failed to load prices:', error);
+    }
+  };
 
   const loadData = async () => {
     try {
       const session = await api.getSession();
       if (!session) {
-        navigate('/');
+        startNavigation('/', navigate);
         return;
       }
 
@@ -73,21 +87,29 @@ export default function SwapRequests() {
     }
   };
 
-  const handleRespond = async (requestId: string, action: 'approve' | 'reject') => {
+  const handleRespond = async (requestId: string, action: 'approve' | 'reject' | 'cancel') => {
     if (!token) return;
 
     try {
       await api.respondToSwapRequest(token, requestId, action);
-      toast.success(action === 'approve' ? '요청을 승인했습니다.' : '요청을 거절했습니다.');
+      if (action === 'cancel') {
+        toast.success('요청을 취소했습니다.');
+      } else {
+        toast.success(action === 'approve' ? '요청을 승인했습니다.' : '요청을 거절했습니다.');
+      }
       loadData();
     } catch (error: any) {
       console.error('Failed to respond to swap request:', error);
-      toast.error(error.message || '응답 처리 실패');
+      toast.error(error.message || '요청 처리 실패');
     }
   };
 
-  const sentRequests = requests.filter((r) => r.fromUserId === currentUser?.id);
-  const receivedRequests = requests.filter((r) => r.toUserId === currentUser?.id);
+  const sortedRequests = [...requests].sort((a, b) => 
+    new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+  );
+
+  const sentRequests = sortedRequests.filter((r) => r.fromUserId === currentUser?.id);
+  const receivedRequests = sortedRequests.filter((r) => r.toUserId === currentUser?.id);
   const pendingReceivedCount = receivedRequests.filter(r => r.status === 'pending').length;
 
   if (loading) {
@@ -111,7 +133,7 @@ export default function SwapRequests() {
       <header className="sticky top-12 z-30 bg-white/80 backdrop-blur-xl border-b border-gray-100 px-4 py-4">
         <div className="flex items-center justify-between max-w-lg mx-auto w-full">
           <div className="flex items-center space-x-3">
-            <Button variant="ghost" size="icon" onClick={() => navigate('/dashboard')} className="rounded-full text-gray-900 active:scale-90 transition-all">
+            <Button variant="ghost" size="icon" onClick={() => startNavigation('/dashboard', navigate)} className="rounded-full text-gray-900 active:scale-90 transition-all">
               <ArrowLeft className="w-5 h-5" />
             </Button>
             <h1 className="text-xl font-black text-gray-900 tracking-tight">당직 교환</h1>
@@ -186,23 +208,38 @@ export default function SwapRequests() {
                         className={`rounded-full text-[10px] px-3 py-1 font-black uppercase tracking-tight ${
                            request.status === 'pending' ? 'bg-gray-100 text-gray-500' : 
                            request.status === 'approved' ? 'bg-green-600 text-white shadow-lg shadow-green-100' : 
+                           request.status === 'cancelled' ? 'bg-gray-400 text-white' :
                            'bg-red-600 text-white shadow-lg shadow-red-100'
                         }`}
                       >
-                        {request.status === 'pending' ? '대기 중' : request.status === 'approved' ? '승인됨' : '거절됨'}
+                        {request.status === 'pending' ? '대기 중' : request.status === 'approved' ? '승인됨' : request.status === 'cancelled' ? '취소됨' : '거절됨'}
                       </Badge>
                     </div>
 
-                    <div className="bg-gray-50 rounded-2xl p-4 flex items-center justify-between mb-6 border border-gray-100">
-                      <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 rounded-xl bg-white flex items-center justify-center text-indigo-600 shadow-sm">
-                           <CalendarIcon className="w-4 h-4" />
+                    <div className="bg-gray-50 rounded-2xl p-4 space-y-3 mb-6 border border-gray-100">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          <div className="w-8 h-8 rounded-xl bg-white flex items-center justify-center text-indigo-600 shadow-sm">
+                            <CalendarIcon className="w-4 h-4" />
+                          </div>
+                          <span className="text-sm font-black text-gray-700 tracking-tight">
+                            {request.year}년 {request.month}월 {request.date}일 당직
+                          </span>
                         </div>
-                        <span className="text-sm font-black text-gray-700 tracking-tight">
-                          {request.year}년 {request.month}월 {request.date}일 당직
-                        </span>
+                        <ArrowRight className="w-4 h-4 text-gray-300" />
                       </div>
-                      <ArrowRight className="w-4 h-4 text-gray-300" />
+                      <div className="h-px bg-gray-100 w-full" />
+                      <div className="flex items-center justify-between px-1">
+                        <p className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">교환 대상 수당</p>
+                        <p className="text-xs font-black text-indigo-600">
+                          {(() => {
+                            const dateObj = new Date(request.year, request.month - 1, request.date);
+                            const isWeekend = dateObj.getDay() === 0 || dateObj.getDay() === 6;
+                            // Simplified holiday check since we don't have the full list here
+                            return isWeekend ? dutyPrices.weekend.toLocaleString() : dutyPrices.weekday.toLocaleString();
+                          })()}원
+                        </p>
+                      </div>
                     </div>
 
                     <div className="flex items-center justify-between">
@@ -227,6 +264,20 @@ export default function SwapRequests() {
                           </Button>
                         </div>
                       )}
+
+                      {tab === 'sent' && request.status === 'pending' && (
+                        <Button
+                          variant="ghost"
+                          className="h-10 rounded-xl text-gray-400 hover:bg-gray-50 font-black text-xs px-4 border border-gray-100 active:scale-95 transition-all"
+                          onClick={() => {
+                            if (confirm('이 교환 요청을 취소하시겠습니까?')) {
+                              handleRespond(request.id, 'cancel');
+                            }
+                          }}
+                        >
+                          요청 취소
+                        </Button>
+                      )}
                     </div>
                   </CardContent>
                 </Card>
@@ -239,7 +290,7 @@ export default function SwapRequests() {
       {/* Mobile Bottom Navigation */}
       <nav className="fixed bottom-0 left-0 right-0 z-40 bg-white/95 backdrop-blur-xl border-t border-gray-100 px-6 py-2 flex items-center justify-between max-w-lg mx-auto w-full h-20 rounded-t-[32px] shadow-[0_-10px_40px_rgba(0,0,0,0.05)] pb-safe">
         <button 
-          onClick={() => navigate('/dashboard')}
+          onClick={() => startNavigation('/dashboard', navigate)}
           className="flex flex-col items-center justify-center space-y-1.5 text-gray-400 hover:text-indigo-600 transition-all active:scale-90 flex-1"
         >
           <CalendarIcon className="w-6 h-6" />
@@ -258,10 +309,10 @@ export default function SwapRequests() {
         </button>
         {currentUser?.role === 'admin' && (
           <button 
-            onClick={() => navigate('/generate')}
+            onClick={() => startNavigation('/admin', navigate)}
             className="flex flex-col items-center justify-center space-y-1.5 text-gray-400 hover:text-indigo-600 transition-all active:scale-90 flex-1"
           >
-            <Settings className="w-6 h-6" />
+            <SettingsIcon className="w-6 h-6" />
             <span className="text-[10px] font-black uppercase tracking-tight">관리도구</span>
           </button>
         )}
