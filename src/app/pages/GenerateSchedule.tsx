@@ -132,6 +132,30 @@ export default function GenerateSchedule() {
     }
   };
 
+  const handleBulkDeleteNonAdmins = async () => {
+    if (!token) return;
+    
+    const nonAdmins = users.filter(u => u.role !== 'admin');
+    if (nonAdmins.length === 0) {
+      toast.info('삭제할 일반 사용자가 없습니다.');
+      return;
+    }
+
+    if (!confirm(`관리자를 제외한 모든 사용자(${nonAdmins.length}명)를 정말로 삭제하시겠습니까?\n이 작업은 되돌릴 수 없으며, 모든 일반 대원은 즉시 로그인이 차단됩니다.`)) return;
+
+    setLoading(true);
+    try {
+      const result = await api.bulkDeleteNonAdmins(token);
+      toast.success(result.message);
+      const { users: allUsers } = await api.getUsers(token);
+      setUsers(allUsers);
+    } catch (error: any) {
+      toast.error(error.message || '일괄 삭제 실패');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const toggleWeekdayUser = (userId: string) => {
     if (weekdaySequence.includes(userId)) {
       setWeekdaySequence(weekdaySequence.filter(id => id !== userId));
@@ -514,6 +538,19 @@ export default function GenerateSchedule() {
                   <li className="text-xs text-indigo-700/80 leading-relaxed list-disc ml-4">계정 삭제 시 해당 사용자는 시스템에 더 이상 로그인할 수 없습니다.</li>
                   <li className="text-xs text-indigo-700/80 leading-relaxed list-disc ml-4">최소 1명의 관리자 계정은 유지되어야 합니다.</li>
                 </ul>
+                
+                <div className="mt-6 pt-6 border-t border-indigo-200/50">
+                  <Button 
+                    variant="destructive" 
+                    className="w-full h-12 rounded-xl bg-red-100 text-red-600 border border-red-200 hover:bg-red-200 transition-colors font-bold shadow-none"
+                    onClick={handleBulkDeleteNonAdmins}
+                    disabled={loading || users.filter(u => u.role !== 'admin').length === 0}
+                  >
+                    <Trash2 className="w-4 h-4 mr-2" />
+                    관리자 제외 모든 계정 일괄 삭제
+                  </Button>
+                  <p className="text-[10px] text-red-400 mt-2 text-center font-medium">* 이 작업은 되돌릴 수 없으니 주의하십시오.</p>
+                </div>
               </div>
             </motion.div>
           )}

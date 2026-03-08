@@ -38,14 +38,26 @@ export const api = {
     return response.json();
   },
 
-  async signup(username: string, password: string, name: string, role: string, securityQuestion: string, securityAnswer: string) {
+  async signup(data: { username: string; password?: string; name: string; role: string; securityQuestion: string; securityAnswer: string }) {
+    const { username, password, name, role, securityQuestion, securityAnswer } = data;
+    
+    // Ensure username is a string
+    const stringUsername = typeof username === 'string' ? username : (username as any).username;
+
     const response = await fetch(`${API_BASE_URL}/signup`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${publicAnonKey}`,
       },
-      body: JSON.stringify({ username, password, name, role, securityQuestion, securityAnswer }),
+      body: JSON.stringify({ 
+        username: stringUsername, 
+        password, 
+        name, 
+        role, 
+        securityQuestion, 
+        securityAnswer 
+      }),
     });
 
     if (!response.ok) {
@@ -372,6 +384,23 @@ export const api = {
     if (!response.ok) {
       const error = await response.json();
       throw new Error(error.error || '사용자 삭제 실패');
+    }
+
+    return response.json();
+  },
+
+  async bulkDeleteNonAdmins(token: string) {
+    const response = await fetch(`${API_BASE_URL}/users/bulk-delete-non-admins`, {
+      method: 'POST',
+      headers: { 
+        'Authorization': `Bearer ${publicAnonKey}`,
+        'x-user-token': token 
+      },
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || '일괄 삭제 실패');
     }
 
     return response.json();

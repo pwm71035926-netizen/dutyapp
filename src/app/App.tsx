@@ -10,6 +10,9 @@ export default function App() {
   const [showSplash, setShowSplash] = useState(true);
 
   useEffect(() => {
+    // Set Light Mode as Default
+    document.documentElement.classList.remove('dark');
+
     // PWA Manifest and Meta Tags Injection
     const manifestLink = document.createElement('link');
     manifestLink.rel = 'manifest';
@@ -18,18 +21,21 @@ export default function App() {
       short_name: "공당",
       start_url: "/",
       display: "standalone",
+      orientation: "portrait",
       background_color: "#ffffff",
-      theme_color: "#030213",
+      theme_color: "#6366f1",
       icons: [
         {
-          src: "https://api.dicebear.com/7.x/avataaars/svg?seed=gongdang&backgroundColor=030213",
+          src: "https://api.dicebear.com/7.x/avataaars/svg?seed=공당&backgroundColor=6366f1",
           sizes: "192x192",
-          type: "image/svg+xml"
+          type: "image/svg+xml",
+          purpose: "any maskable"
         },
         {
-          src: "https://api.dicebear.com/7.x/avataaars/svg?seed=gongdang&backgroundColor=030213",
+          src: "https://api.dicebear.com/7.x/avataaars/svg?seed=공당&backgroundColor=6366f1",
           sizes: "512x512",
-          type: "image/svg+xml"
+          type: "image/svg+xml",
+          purpose: "any maskable"
         }
       ]
     });
@@ -38,8 +44,13 @@ export default function App() {
     // iOS/Android Mobile Optimization Tags
     const metaTheme = document.createElement('meta');
     metaTheme.name = 'theme-color';
-    metaTheme.content = '#030213';
+    metaTheme.content = '#ffffff';
     document.head.appendChild(metaTheme);
+
+    const metaViewport = document.querySelector('meta[name="viewport"]');
+    if (metaViewport) {
+      metaViewport.setAttribute('content', 'width=device-width, initial-scale=1, maximum-scale=1, user-scalable=0, viewport-fit=cover');
+    }
 
     const metaMobileWeb = document.createElement('meta');
     metaMobileWeb.name = 'mobile-web-app-capable';
@@ -100,33 +111,28 @@ export default function App() {
       <RouterProvider router={router} />
       <Toaster 
         position="top-center" 
-        expand={true}
+        expand={false}
         visibleToasts={1}
+        duration={500}
         toastOptions={{
           style: {
-            position: 'fixed',
-            top: '50%',
-            left: '50%',
-            transform: 'translate(-50%, -50%)',
-            margin: 0,
             borderRadius: '28px',
-            border: '1px solid rgba(0, 0, 0, 0.05)',
-            boxShadow: '0 30px 60px -12px rgba(0, 0, 0, 0.25), 0 18px 36px -18px rgba(0, 0, 0, 0.3)',
+            border: 'none',
+            boxShadow: '0 25px 70px -10px rgba(0, 0, 0, 0.4)',
             padding: '24px 36px',
-            fontSize: '17px',
-            fontWeight: '700',
+            fontSize: '16px',
+            fontWeight: '900',
             background: 'rgba(255, 255, 255, 0.98)',
-            backdropFilter: 'blur(16px)',
-            maxWidth: '85vw',
-            width: 'max-content',
+            backdropFilter: 'blur(20px)',
+            maxWidth: '320px',
+            width: 'calc(100vw - 64px)',
             textAlign: 'center',
             display: 'flex',
-            flexDirection: 'column',
             alignItems: 'center',
             justifyContent: 'center',
-            gap: '8px',
             color: '#1a1a1a',
-            zIndex: 9999,
+            borderBottom: '6px solid #6366f1',
+            margin: 0,
           }
         }}
       />

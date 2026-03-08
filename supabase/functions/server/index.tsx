@@ -59,12 +59,34 @@ app.get('/make-server-a032f464/health', (c) => c.json({ status: 'ok' }));
 // 회원가입
 app.post('/make-server-a032f464/signup', async (c) => {
   try {
-    const { username, password, name, role = 'user', securityQuestion, securityAnswer } = await c.req.json();
+    const body = await c.req.json();
+    console.log('Signup payload:', JSON.stringify(body));
     
+    let { username, password, name, role = 'user', securityQuestion, securityAnswer } = body;
+    
+    // Defensive check: if username is an object, try to extract string
+    if (username && typeof username === 'object') {
+      console.log('Warning: username is an object', username);
+      username = username.username || String(username);
+    }
+
+    if (!username || typeof username !== 'string') {
+      return c.json({ error: '올바른 아이디를 입력해주세요.' }, 400);
+    }
+
     // Convert username to internal email
-    const email = `${username}@internal.app`;
-    
-    const { data, error } = await supabaseAdmin.auth.admin.createUser({
+    const email = `${username.trim()}@internal.app`;
+
+    // 1. 먼저 KV에 해당 아이디가 있는지 확인 (정상적인 중복 체크)
+    const allUsersKV = await kv.getByPrefix('user:');
+    const existingKVUser = allUsersKV.find((u: any) => u.username === username);
+
+    if (existingKVUser) {
+      return c.json({ error: '이미 사용 중인 아이디입니다.' }, 400);
+    }
+
+    // 2. Auth 생성을 시도
+    let { data, error } = await supabaseAdmin.auth.admin.createUser({
       email,
       password,
       user_metadata: { 
@@ -77,13 +99,46 @@ app.post('/make-server-a032f464/signup', async (c) => {
       email_confirm: true,
     });
 
-    if (error) return c.json({ error: error.message }, 400);
+    // 3. 만약 Auth에 이미 존재한다고 하면 (Ghost User 현상)
+    if (error && error.message.includes('already been registered')) {
+      console.log(`Ghost user detected for ${username}. Cleaning up...`);
+      
+      // Auth에서 해당 이메일의 유저를 찾아서 삭제 시도
+      const { data: listData, error: listError } = await supabaseAdmin.auth.admin.listUsers();
+      if (!listError && listData?.users) {
+        const ghostUser = listData.users.find(u => u.email === email);
+        if (ghostUser) {
+          await supabaseAdmin.auth.admin.deleteUser(ghostUser.id);
+          console.log(`Stale Auth user ${ghostUser.id} deleted.`);
+          
+          // 삭제 후 다시 생성 시도
+          const retry = await supabaseAdmin.auth.admin.createUser({
+            email,
+            password,
+            user_metadata: { username, name, role, securityQuestion, securityAnswer },
+            email_confirm: true,
+          });
+          data = retry.data;
+          error = retry.error;
+        }
+      }
+    }
+
+    if (error) {
+      console.error(`Signup error for ${email}: ${error.message}`);
+      return c.json({ error: error.message }, 400);
+    }
+
+    if (!data?.user) {
+      return c.json({ error: '사용자 생성에 실패했습니다.' }, 500);
+    }
 
     const userData = { id: data.user.id, username, name, role };
     await kv.set(`user:${data.user.id}`, userData);
     
     return c.json({ success: true, user: userData });
   } catch (error: any) {
+    console.error('Signup crash:', error);
     return c.json({ error: error.message }, 500);
   }
 });
@@ -478,6 +533,47 @@ app.delete('/make-server-a032f464/users/:userId', async (c) => {
     // but they will show as "Unknown" or similar in UI.
 
     return c.json({ success: true, message: '사용자가 성공적으로 삭제되었습니다.' });
+  } catch (error: any) {
+    return c.json({ error: error.message }, 500);
+  }
+});
+
+// 관리자 제외 모든 사용자 일괄 삭제
+app.post('/make-server-a032f464/users/bulk-delete-non-admins', async (c) => {
+  try {
+    const user = await verifyUser(c.req);
+    if (!user) return c.json({ error: 'Unauthorized' }, 401);
+
+    const userData = await kv.get(`user:${user.id}`);
+    if (userData?.role !== 'admin') return c.json({ error: 'Admin only' }, 403);
+
+    const allUsers = await kv.getByPrefix('user:');
+    const nonAdminUsers = allUsers.filter(u => u.role !== 'admin');
+    
+    if (nonAdminUsers.length === 0) {
+      return c.json({ success: true, message: '삭제할 일반 사용자가 없습니다.', count: 0 });
+    }
+
+    const deletePromises = nonAdminUsers.map(async (u) => {
+      try {
+        await supabaseAdmin.auth.admin.deleteUser(u.id);
+        await kv.del(`user:${u.id}`);
+        await kv.del(`notifications:${u.id}`);
+        return { id: u.id, success: true };
+      } catch (e) {
+        console.error(`Failed to delete user ${u.id}:`, e);
+        return { id: u.id, success: false, error: e };
+      }
+    });
+
+    const results = await Promise.all(deletePromises);
+    const successCount = results.filter(r => r.success).length;
+
+    return c.json({ 
+      success: true, 
+      message: `${successCount}명의 일반 사용자가 삭제되었습니다.`,
+      count: successCount
+    });
   } catch (error: any) {
     return c.json({ error: error.message }, 500);
   }
