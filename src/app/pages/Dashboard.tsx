@@ -920,7 +920,7 @@ export default function Dashboard() {
     </PullToRefresh>
 
     {/* Mobile Bottom Navigation */}
-    <nav className="fixed bottom-0 left-0 right-0 z-40 bg-white/95 backdrop-blur-md border-t border-gray-100 px-6 pt-2 flex items-center justify-between max-w-lg mx-auto w-full rounded-t-[32px] shadow-[0_-10px_40px_rgba(0,0,0,0.05)] nav-bottom-safe" style={{ minHeight: '80px' }}>
+    <nav className="fixed bottom-0 left-0 right-0 z-40 bg-white backdrop-blur-md border-t border-gray-100 px-6 pt-2 flex items-center justify-between max-w-lg mx-auto w-full rounded-t-[32px] shadow-[0_-10px_40px_rgba(0,0,0,0.05)] nav-bottom-safe" style={{ minHeight: '80px' }}>
         <button onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })} className="flex flex-col items-center justify-center space-y-1.5 flex-1 transition-all text-indigo-600 active:scale-90">
           <CalendarIcon className="w-6 h-6" />
           <span className="text-[10px] font-black uppercase tracking-tight">당직일정</span>
