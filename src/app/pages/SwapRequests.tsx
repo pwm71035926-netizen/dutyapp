@@ -1022,6 +1022,9 @@ export default function SwapRequests() {
         )}
       </nav>
 
+      {/* iOS Safe Area Bottom Fill — prevents scrolled content from showing below nav */}
+      <div className="fixed bottom-0 left-0 right-0 z-30 bg-white" style={{ height: 'env(safe-area-inset-bottom, 0px)' }} />
+
       <ConfirmDialog
         open={confirmState.open}
         onOpenChange={(open) => setConfirmState({ ...confirmState, open })}
