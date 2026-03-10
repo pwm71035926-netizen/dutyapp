@@ -721,4 +721,165 @@ app.post('/make-server-a032f464/settings/duty-prices', async (c) => {
   }
 });
 
+// 날짜 기반 교환 요청 (v2) - fromDate의 내 당직을 toDate 당직자와 교환
+app.post('/make-server-a032f464/swap-requests-v2', async (c) => {
+  try {
+    const user = await verifyUser(c.req);
+    if (!user) return c.json({ error: 'Unauthorized' }, 401);
+
+    const { year, month, fromDate, toDate } = await c.req.json();
+    
+    if (!year || !month || !fromDate || !toDate) {
+      return c.json({ error: '필수 항목이 누락되었습니다.' }, 400);
+    }
+    if (fromDate === toDate) {
+      return c.json({ error: '같은 날짜끼리는 교환할 수 없습니다.' }, 400);
+    }
+
+    const duties = (await kv.get(`duties:${year}-${month}`)) || [];
+    if (duties.length === 0) {
+      return c.json({ error: '해당 월의 당직 일정이 없습니다.' }, 404);
+    }
+
+    const fromDuty = duties.find((d: any) => d.date === fromDate);
+    const toDuty = duties.find((d: any) => d.date === toDate);
+
+    if (!fromDuty) return c.json({ error: `${fromDate}일에 배정된 당직이 없습니다.` }, 400);
+    if (!toDuty) return c.json({ error: `${toDate}일에 배정된 당직이 없습니다.` }, 400);
+
+    // 요청자가 fromDate 당직자인지 확인
+    if (fromDuty.userId !== user.id) {
+      return c.json({ error: '본인의 당직 날짜만 교환 요청할 수 있습니다.' }, 403);
+    }
+
+    // 자기 자신과 교환 불가
+    if (toDuty.userId === user.id) {
+      return c.json({ error: '본인의 다른 당직과는 교환할 수 없습니다.' }, 400);
+    }
+
+    const uFrom = await kv.get(`user:${user.id}`);
+    const uTo = await kv.get(`user:${toDuty.userId}`);
+    if (!uFrom || !uTo) return c.json({ error: '사용자 정보를 찾을 수 없습니다.' }, 404);
+
+    const rid = `${Date.now()}-${user.id}`;
+    const req = {
+      id: rid,
+      fromUserId: user.id,
+      fromUserName: uFrom.name,
+      toUserId: toDuty.userId,
+      toUserName: uTo.name,
+      year,
+      month,
+      fromDate,
+      toDate,
+      date: fromDate, // backward compat
+      status: 'pending',
+      createdAt: new Date().toISOString()
+    };
+    await kv.set(`swap-request:${rid}`, req);
+
+    // 상대방에게 알림
+    const notifs = (await kv.get(`notifications:${toDuty.userId}`)) || [];
+    notifs.push({
+      id: Date.now(),
+      message: `${uFrom.name}님이 ${month}/${fromDate}일 ↔ ${month}/${toDate}일 당직 교환을 요청했습니다.`,
+      type: 'swap-request',
+      requestId: rid,
+      read: false,
+      createdAt: new Date().toISOString()
+    });
+    await kv.set(`notifications:${toDuty.userId}`, notifs);
+
+    return c.json({ success: true, request: req });
+  } catch (error: any) {
+    console.error('Swap request v2 error:', error);
+    return c.json({ error: error.message }, 500);
+  }
+});
+
+// 요청 처리 (v2 지원 - 양방향 날짜 교환)
+app.post('/make-server-a032f464/swap-requests-v2/:requestId/:action', async (c) => {
+  const user = await verifyUser(c.req);
+  if (!user) return c.json({ error: 'Unauthorized' }, 401);
+
+  const { requestId, action } = c.req.param();
+  const req = await kv.get(`swap-request:${requestId}`);
+  if (!req) return c.json({ error: 'Request not found' }, 404);
+
+  // 취소 처리
+  if (action === 'cancel') {
+    if (req.fromUserId !== user.id) return c.json({ error: '보낸 사람만 취소할 수 있습니다.' }, 403);
+    if (req.status !== 'pending') return c.json({ error: '대기 중인 요청만 취소할 수 있습니다.' }, 400);
+    
+    req.status = 'cancelled';
+    await kv.set(`swap-request:${requestId}`, req);
+    
+    const targetNotifs = (await kv.get(`notifications:${req.toUserId}`)) || [];
+    targetNotifs.push({
+      id: Date.now(),
+      message: `${req.fromUserName}님이 교환 요청을 취소했습니다.`,
+      type: 'swap-cancelled',
+      requestId,
+      read: false,
+      createdAt: new Date().toISOString()
+    });
+    await kv.set(`notifications:${req.toUserId}`, targetNotifs);
+    return c.json({ success: true, request: req });
+  }
+
+  // 승인/거절 (받는 사람만)
+  if (req.toUserId !== user.id) return c.json({ error: '받는 사람만 처리할 수 있습니다.' }, 403);
+  if (req.status !== 'pending') return c.json({ error: '이미 처리된 요청입니다.' }, 400);
+
+  if (action === 'approve') {
+    const ds = await kv.get(`duties:${req.year}-${req.month}`);
+    if (!ds) return c.json({ error: '당직 일정을 찾을 수 없습니다.' }, 404);
+
+    const hasFromDate = !!req.fromDate;
+    
+    if (hasFromDate && req.toDate) {
+      // v2: 양방향 날짜 교환 (fromDate ↔ toDate)
+      const updated = ds.map((d: any) => {
+        if (d.date === req.fromDate && d.userId === req.fromUserId) {
+          return { ...d, userId: req.toUserId, userName: req.toUserName };
+        }
+        if (d.date === req.toDate && d.userId === req.toUserId) {
+          return { ...d, userId: req.fromUserId, userName: req.fromUserName };
+        }
+        return d;
+      });
+      await kv.set(`duties:${req.year}-${req.month}`, updated);
+    } else {
+      // v1: 기존 단일 날짜 교환 (backward compat)
+      const updated = ds.map((d: any) => {
+        if (d.date === req.date) {
+          if (d.userId === req.fromUserId) return { ...d, userId: req.toUserId, userName: req.toUserName };
+          if (d.userId === req.toUserId) return { ...d, userId: req.fromUserId, userName: req.fromUserName };
+        }
+        return d;
+      });
+      await kv.set(`duties:${req.year}-${req.month}`, updated);
+    }
+    req.status = 'approved';
+  } else {
+    req.status = 'rejected';
+  }
+
+  await kv.set(`swap-request:${requestId}`, req);
+  const notifs = (await kv.get(`notifications:${req.fromUserId}`)) || [];
+  const dateInfo = req.fromDate && req.toDate 
+    ? `${req.month}/${req.fromDate}일 ↔ ${req.month}/${req.toDate}일` 
+    : `${req.month}/${req.date}일`;
+  notifs.push({
+    id: Date.now(),
+    message: `${dateInfo} 교환 요청이 ${action === 'approve' ? '승인' : '거절'}되었습니다.`,
+    type: 'swap-response',
+    read: false,
+    createdAt: new Date().toISOString()
+  });
+  await kv.set(`notifications:${req.fromUserId}`, notifs);
+
+  return c.json({ success: true, request: req });
+});
+
 Deno.serve(app.fetch);

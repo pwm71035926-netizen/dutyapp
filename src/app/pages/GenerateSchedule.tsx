@@ -6,7 +6,7 @@ import { Button } from '../components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
 import { Label } from '../components/ui/label';
 import { Input } from '../components/ui/input';
-import { Checkbox } from '../components/ui/checkbox';
+
 import { toast } from 'sonner';
 import { 
   ArrowLeft, 
@@ -19,11 +19,16 @@ import {
   Trash2, 
   MoreVertical,
   ChevronRight,
+  ChevronLeft,
   ShieldAlert,
   X,
   Wallet,
   Settings as SettingsIcon,
-  HelpCircle
+
+  CalendarDays,
+  Save,
+  Loader2,
+  Check
 } from 'lucide-react';
 import { motion, Reorder, AnimatePresence } from 'motion/react';
 import {
@@ -33,7 +38,6 @@ import {
   DialogHeader,
   DialogTitle,
   DialogTrigger,
-  DialogFooter,
 } from '../components/ui/dialog';
 import { ConfirmDialog } from '../components/ui/confirm-dialog';
 
@@ -51,7 +55,7 @@ interface User {
 export default function GenerateSchedule() {
   const navigate = useNavigate();
   const { startNavigation } = useContext(NavigationContext);
-  const [activeTab, setActiveTab] = useState<'schedule' | 'users' | 'settings'>('schedule');
+  const [activeTab, setActiveTab] = useState<'schedule' | 'users' | 'settings' | 'duty-edit'>('schedule');
   const [token, setToken] = useState<string | null>(null);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [users, setUsers] = useState<User[]>([]);
@@ -88,6 +92,15 @@ export default function GenerateSchedule() {
   // States for duty prices
   const [dutyPrices, setDutyPrices] = useState({ weekday: 30000, weekend: 100000 });
   const [isUpdatingPrices, setIsUpdatingPrices] = useState(false);
+
+  // Duty edit states
+  const [editYear, setEditYear] = useState(new Date().getFullYear());
+  const [editMonth, setEditMonth] = useState(new Date().getMonth() + 1);
+  const [editDuties, setEditDuties] = useState<any[]>([]);
+  const [editLoading, setEditLoading] = useState(false);
+  const [editSaving, setEditSaving] = useState(false);
+  const [selectedEditDay, setSelectedEditDay] = useState<number | null>(null);
+  const [editHasChanges, setEditHasChanges] = useState(false);
 
   // Confirmation dialog states
   const [confirmState, setConfirmState] = useState<{
@@ -340,6 +353,79 @@ export default function GenerateSchedule() {
     setCustomHolidays(customHolidays.filter(d => d !== date));
   };
 
+  // Duty edit functions
+  const loadEditDuties = async (y: number, m: number) => {
+    if (!token) return;
+    setEditLoading(true);
+    try {
+      const { duties: d } = await api.getDuties(token, y, m);
+      setEditDuties(d || []);
+      setEditHasChanges(false);
+      setSelectedEditDay(null);
+    } catch {
+      setEditDuties([]);
+    } finally {
+      setEditLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'duty-edit' && token) {
+      loadEditDuties(editYear, editMonth);
+    }
+  }, [activeTab, editYear, editMonth, token]);
+
+  const handleEditDutyChange = (day: number, userId: string) => {
+    const user = users.find(u => u.id === userId);
+    if (!user) return;
+    
+    setEditDuties(prev => {
+      const existing = prev.find(d => d.date === day);
+      if (existing) {
+        return prev.map(d => d.date === day ? { ...d, userId: user.id, userName: user.name } : d);
+      } else {
+        const dayOfWeek = new Date(editYear, editMonth - 1, day).getDay();
+        const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+        return [...prev, { date: day, userId: user.id, userName: user.name, type: isWeekend ? 'weekend' : 'weekday' }];
+      }
+    });
+    setEditHasChanges(true);
+  };
+
+  const handleRemoveDuty = (day: number) => {
+    setEditDuties(prev => prev.filter(d => d.date !== day));
+    setEditHasChanges(true);
+  };
+
+  const handleSaveEditDuties = async () => {
+    if (!token) return;
+    setEditSaving(true);
+    try {
+      await api.saveDuties(token, editYear, editMonth, editDuties);
+      toast.success('당직 일정이 저장되었습니다!');
+      setEditHasChanges(false);
+      setSelectedEditDay(null);
+    } catch (error: any) {
+      toast.error(error.message || '저장 실패');
+    } finally {
+      setEditSaving(false);
+    }
+  };
+
+  const getEditCalendarDays = () => {
+    const firstDay = new Date(editYear, editMonth - 1, 1);
+    const lastDay = new Date(editYear, editMonth, 0);
+    const totalDays = lastDay.getDate();
+    const startingDayOfWeek = firstDay.getDay();
+    const result: (number | null)[] = [];
+    for (let i = 0; i < startingDayOfWeek; i++) result.push(null);
+    for (let i = 1; i <= totalDays; i++) result.push(i);
+    return result;
+  };
+
+  const editDutyMap = new Map<number, any>();
+  editDuties.forEach(d => editDutyMap.set(d.date, d));
+
   const getDaysInMonth = (year: number, month: number) => new Date(year, month, 0).getDate();
 
   const DateSelector = ({ label, year, month, day, onYearChange, onMonthChange, onDayChange }: any) => {
@@ -377,11 +463,11 @@ export default function GenerateSchedule() {
   const getUserById = (id: string) => users.find(u => u.id === id);
 
   return (
-    <div className="min-h-screen bg-gray-50 pb-20">
+    <div className="min-h-screen bg-gray-50 content-bottom-safe">
       {/* iOS/Android Status Bar Safe Area */}
-      <div className="sticky top-0 left-0 right-0 z-50 bg-white h-10 w-full" />
+      <div className="fixed top-0 left-0 right-0 z-50 bg-white safe-top-spacer" />
 
-      <header className="sticky top-10 z-30 bg-white/80 backdrop-blur-md border-b px-4 py-3">
+      <header className="sticky top-safe z-30 bg-white/80 backdrop-blur-md border-b px-4 py-3">
         <div className="flex items-center justify-between max-w-lg mx-auto w-full">
           <div className="flex items-center space-x-3">
             <Button variant="ghost" size="icon" onClick={() => startNavigation('/dashboard', navigate)} className="rounded-full">
@@ -399,44 +485,57 @@ export default function GenerateSchedule() {
 
       <main className="max-w-lg mx-auto px-4 pt-6 space-y-6">
         {/* Tab Selector */}
-        <div className="flex p-1 bg-white rounded-2xl shadow-sm border border-gray-100">
+        <div className="grid grid-cols-4 p-1 bg-white rounded-2xl shadow-sm border border-gray-100 gap-0.5">
           <button
             onClick={() => setActiveTab('schedule')}
-            className={`flex-1 py-3 rounded-xl text-sm font-bold transition-all ${
+            className={`py-2.5 rounded-xl text-[11px] font-bold transition-all ${
               activeTab === 'schedule' 
                 ? 'bg-indigo-600 text-white shadow-md' 
                 : 'text-gray-400 hover:text-gray-600'
             }`}
           >
-            <div className="flex items-center justify-center gap-2">
+            <div className="flex flex-col items-center gap-1">
               <CalendarPlus className="w-4 h-4" />
-              일정 생성
+              일정생성
+            </div>
+          </button>
+          <button
+            onClick={() => setActiveTab('duty-edit')}
+            className={`py-2.5 rounded-xl text-[11px] font-bold transition-all ${
+              activeTab === 'duty-edit' 
+                ? 'bg-indigo-600 text-white shadow-md' 
+                : 'text-gray-400 hover:text-gray-600'
+            }`}
+          >
+            <div className="flex flex-col items-center gap-1">
+              <CalendarDays className="w-4 h-4" />
+              당직수정
             </div>
           </button>
           <button
             onClick={() => setActiveTab('users')}
-            className={`flex-1 py-3 rounded-xl text-sm font-bold transition-all ${
+            className={`py-2.5 rounded-xl text-[11px] font-bold transition-all ${
               activeTab === 'users' 
                 ? 'bg-indigo-600 text-white shadow-md' 
                 : 'text-gray-400 hover:text-gray-600'
             }`}
           >
-            <div className="flex items-center justify-center gap-2">
+            <div className="flex flex-col items-center gap-1">
               <Users className="w-4 h-4" />
-              사용자 관리
+              사용자
             </div>
           </button>
           <button
             onClick={() => setActiveTab('settings')}
-            className={`flex-1 py-3 rounded-xl text-sm font-bold transition-all ${
+            className={`py-2.5 rounded-xl text-[11px] font-bold transition-all ${
               activeTab === 'settings' 
                 ? 'bg-indigo-600 text-white shadow-md' 
                 : 'text-gray-400 hover:text-gray-600'
             }`}
           >
-            <div className="flex items-center justify-center gap-2">
+            <div className="flex flex-col items-center gap-1">
               <SettingsIcon className="w-4 h-4" />
-              환경 설정
+              설정
             </div>
           </button>
         </div>
@@ -506,6 +605,44 @@ export default function GenerateSchedule() {
                        수정된 단가는 대시보드 정산 칸에 즉시 반영되며, 이미 진행된 근무와 향후 예정된 근무 모두에 공통 적용됩니다.
                      </p>
                    </div>
+                 </CardContent>
+               </Card>
+
+               {/* App Data Reset */}
+               <Card className="border-none shadow-sm rounded-2xl overflow-hidden bg-white">
+                 <CardHeader className="p-5 pb-2">
+                   <CardTitle className="text-base font-bold flex items-center gap-2">
+                     <div className="w-1 h-4 bg-red-500 rounded-full" />
+                     앱 데이터 초기화
+                   </CardTitle>
+                   <CardDescription className="text-xs">모든 로컬 캐시와 데이터를 삭제하고 앱을 초기 상태로 되돌립니다.</CardDescription>
+                 </CardHeader>
+                 <CardContent className="p-5 pt-4 space-y-4">
+                   <div className="p-4 bg-red-50 rounded-xl border border-red-100">
+                     <p className="text-[11px] text-red-600 leading-relaxed flex gap-2">
+                       <Info className="w-3 h-3 shrink-0 mt-0.5" />
+                       초기화 시 로컬 저장소, 세션, 캐시, 서비스 워커가 모두 삭제됩니다. 서버 데이터는 영향받지 않습니다.
+                     </p>
+                   </div>
+                   <Button
+                     variant="outline"
+                     onClick={async () => {
+                       if (confirm('모든 로컬 캐시와 데이터를 삭제하고 앱을 초기화하시겠습니까?')) {
+                         localStorage.clear();
+                         sessionStorage.clear();
+                         const cacheNames = await caches.keys();
+                         await Promise.all(cacheNames.map(name => caches.delete(name)));
+                         const registrations = await navigator.serviceWorker.getRegistrations();
+                         for (let registration of registrations) await registration.unregister();
+                         toast.success('초기화되었습니다.');
+                         setTimeout(() => window.location.reload(), 1000);
+                       }
+                     }}
+                     className="w-full h-12 rounded-xl border-red-200 text-red-600 hover:bg-red-50 font-bold"
+                   >
+                     <Trash2 className="w-4 h-4 mr-2" />
+                     앱 데이터 초기화
+                   </Button>
                  </CardContent>
                </Card>
              </motion.div>
@@ -829,6 +966,196 @@ export default function GenerateSchedule() {
                 </Button>
               </div>
             </motion.div>
+          ) : activeTab === 'duty-edit' ? (
+            <motion.div
+              key="duty-edit-tab"
+              initial={{ opacity: 0, x: 10 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -10 }}
+              className="space-y-4"
+            >
+              {/* Calendar Card */}
+              <Card className="border-none shadow-sm rounded-2xl overflow-hidden bg-white">
+                <CardHeader className="p-4 pb-2">
+                  <div className="flex items-center justify-between">
+                    <CardTitle className="text-base font-bold flex items-center gap-2">
+                      <div className="w-1 h-4 bg-indigo-600 rounded-full" />
+                      당직 일정 수정
+                    </CardTitle>
+                    <div className="flex items-center gap-0.5 bg-gray-50 rounded-xl px-1 py-0.5 border border-gray-100">
+                      <button
+                        onClick={() => {
+                          const prev = editMonth === 1 ? 12 : editMonth - 1;
+                          const prevYear = editMonth === 1 ? editYear - 1 : editYear;
+                          setEditMonth(prev);
+                          setEditYear(prevYear);
+                        }}
+                        className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-white active:scale-90 transition-all"
+                      >
+                        <ChevronLeft className="w-4 h-4 text-gray-500" />
+                      </button>
+                      <span className="text-xs font-black text-indigo-600 min-w-[60px] text-center tabular-nums">
+                        {editYear}.{String(editMonth).padStart(2, '0')}
+                      </span>
+                      <button
+                        onClick={() => {
+                          const next = editMonth === 12 ? 1 : editMonth + 1;
+                          const nextYear = editMonth === 12 ? editYear + 1 : editYear;
+                          setEditMonth(next);
+                          setEditYear(nextYear);
+                        }}
+                        className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-white active:scale-90 transition-all"
+                      >
+                        <ChevronRight className="w-4 h-4 text-gray-500" />
+                      </button>
+                    </div>
+                  </div>
+                  <CardDescription className="text-xs mt-1">날짜를 터치하여 당직자를 변경합니다.</CardDescription>
+                </CardHeader>
+                <CardContent className="p-4 pt-2">
+                  {editLoading ? (
+                    <div className="flex items-center justify-center py-16">
+                      <Loader2 className="w-6 h-6 animate-spin text-indigo-400" />
+                    </div>
+                  ) : (
+                    <>
+                      <div className="grid grid-cols-7 mb-2">
+                        {['일', '월', '화', '수', '목', '금', '토'].map((d, i) => (
+                          <span key={i} className={`text-[9px] font-black text-center uppercase tracking-widest ${i === 0 ? 'text-red-400' : i === 6 ? 'text-blue-400' : 'text-gray-400'}`}>{d}</span>
+                        ))}
+                      </div>
+                      <div className="grid grid-cols-7 gap-1">
+                        {getEditCalendarDays().map((day, index) => {
+                          if (!day) return <div key={index} className="aspect-square" />;
+                          const duty = editDutyMap.get(day);
+                          const isSelected = selectedEditDay === day;
+                          const dayOfWeek = (new Date(editYear, editMonth - 1, 1).getDay() + (day - 1)) % 7;
+                          const today = new Date();
+                          const isToday = day === today.getDate() && editMonth === today.getMonth() + 1 && editYear === today.getFullYear();
+                          return (
+                            <button
+                              key={index}
+                              onClick={() => setSelectedEditDay(isSelected ? null : day)}
+                              className={`aspect-square flex flex-col items-center justify-center rounded-xl transition-all relative cursor-pointer active:scale-90 select-none ${
+                                isSelected
+                                  ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-200 ring-2 ring-indigo-300'
+                                  : duty
+                                    ? 'bg-indigo-50 ring-1 ring-indigo-100 hover:ring-indigo-300'
+                                    : isToday
+                                      ? 'bg-gray-50 ring-1 ring-gray-200'
+                                      : 'hover:bg-gray-50'
+                              }`}
+                            >
+                              <span className={`text-[11px] font-bold ${isSelected ? 'text-white' : dayOfWeek === 0 ? 'text-red-500' : dayOfWeek === 6 ? 'text-blue-500' : 'text-gray-700'}`}>{day}</span>
+                              {duty && (
+                                <span className={`text-[7px] font-bold truncate max-w-full px-0.5 leading-tight mt-0.5 ${isSelected ? 'text-indigo-100' : 'text-indigo-600'}`}>
+                                  {duty.userName?.length > 2 ? duty.userName.slice(0, 2) : duty.userName}
+                                </span>
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+                      <div className="flex items-center gap-4 mt-3 pt-3 border-t border-gray-50">
+                        <div className="flex items-center gap-1.5">
+                          <div className="w-3 h-3 bg-indigo-50 rounded ring-1 ring-indigo-100" />
+                          <span className="text-[9px] font-bold text-gray-400">배정됨</span>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <div className="w-3 h-3 bg-indigo-600 rounded" />
+                          <span className="text-[9px] font-bold text-gray-400">선택됨</span>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <div className="w-3 h-3 bg-white rounded border border-gray-200" />
+                          <span className="text-[9px] font-bold text-gray-400">미배정</span>
+                        </div>
+                      </div>
+                    </>
+                  )}
+                </CardContent>
+              </Card>
+
+              {/* User selector for selected day */}
+              <AnimatePresence>
+                {selectedEditDay !== null && (
+                  <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}>
+                    <Card className="border-none shadow-lg rounded-2xl overflow-hidden bg-white ring-2 ring-indigo-100">
+                      <CardHeader className="p-4 pb-2">
+                        <div className="flex items-center justify-between">
+                          <CardTitle className="text-sm font-bold flex items-center gap-2">
+                            <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center text-white font-black text-sm">{selectedEditDay}</div>
+                            <div>
+                              <p className="text-sm font-bold">{editMonth}월 {selectedEditDay}일 당직자 변경</p>
+                              {editDutyMap.get(selectedEditDay) && (
+                                <p className="text-[10px] text-gray-400 font-medium mt-0.5">현재: <span className="text-indigo-600 font-bold">{editDutyMap.get(selectedEditDay)?.userName}</span></p>
+                              )}
+                            </div>
+                          </CardTitle>
+                          <Button variant="ghost" size="icon" className="rounded-full text-gray-400" onClick={() => setSelectedEditDay(null)}>
+                            <X className="w-4 h-4" />
+                          </Button>
+                        </div>
+                      </CardHeader>
+                      <CardContent className="p-4 pt-2">
+                        <div className="flex flex-wrap gap-2">
+                          {users.map(user => {
+                            const isCurrentDuty = editDutyMap.get(selectedEditDay!)?.userId === user.id;
+                            return (
+                              <button
+                                key={user.id}
+                                onClick={() => handleEditDutyChange(selectedEditDay!, user.id)}
+                                className={`px-3 py-2 rounded-xl text-xs font-bold transition-all active:scale-95 ${
+                                  isCurrentDuty
+                                    ? 'bg-indigo-600 text-white ring-2 ring-indigo-300 shadow-md'
+                                    : 'bg-gray-50 text-gray-700 hover:bg-indigo-50 hover:text-indigo-700 border border-gray-100'
+                                }`}
+                              >
+                                <div className="flex items-center gap-1.5">
+                                  {isCurrentDuty && <Check className="w-3 h-3" />}
+                                  {user.name}
+                                </div>
+                              </button>
+                            );
+                          })}
+                        </div>
+                        {editDutyMap.get(selectedEditDay!) && (
+                          <button
+                            onClick={() => handleRemoveDuty(selectedEditDay!)}
+                            className="mt-3 w-full py-2.5 rounded-xl text-xs font-bold text-red-500 bg-red-50 border border-red-100 hover:bg-red-100 active:scale-[0.98] transition-all flex items-center justify-center gap-1.5"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                            이 날 당직 제거
+                          </button>
+                        )}
+                      </CardContent>
+                    </Card>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
+              {editHasChanges && (
+                <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}>
+                  <Button
+                    onClick={handleSaveEditDuties}
+                    disabled={editSaving}
+                    className="w-full h-14 rounded-2xl bg-indigo-600 hover:bg-indigo-700 font-bold text-base shadow-lg shadow-indigo-100 transition-all active:scale-[0.98]"
+                  >
+                    {editSaving ? (
+                      <div className="flex items-center gap-2"><Loader2 className="w-4 h-4 animate-spin" />저장 중...</div>
+                    ) : (
+                      <div className="flex items-center gap-2"><Save className="w-4 h-4" />변경사항 저장</div>
+                    )}
+                  </Button>
+                </motion.div>
+              )}
+
+              <div className="p-4 bg-amber-50 rounded-2xl border border-amber-100 flex gap-3">
+                <Info className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
+                <p className="text-xs text-amber-700 leading-relaxed font-medium">
+                  날짜를 선택한 후 원하는 대원을 터치하면 해당 날의 당직자가 즉시 변경됩니다. 변경 후 반드시 <strong>변경사항 저장</strong>을 눌러주세요.
+                </p>
+              </div>
+            </motion.div>
           ) : (
             <motion.div
               key="users-tab"
@@ -866,7 +1193,7 @@ export default function GenerateSchedule() {
                                 <span className="text-[10px] text-indigo-500 font-bold">(나)</span>
                               )}
                             </div>
-                            <p className="text-[10px] font-bold text-indigo-600/80 tracking-tighter leading-none mb-1">{user.serviceNumber || '군번 미등록'}</p>
+                            <p className="text-[10px] text-indigo-600/80 tracking-tighter leading-none mb-1">{user.serviceNumber || '군번 미등록'}</p>
                             <p className="text-[10px] text-gray-400 font-medium">@{user.username || user.email?.split('@')[0]}</p>
                           </div>
                         </div>
@@ -878,7 +1205,7 @@ export default function GenerateSchedule() {
                                 <MoreVertical className="w-4 h-4" />
                               </Button>
                             </DialogTrigger>
-                            <DialogContent className="sm:max-w-xs w-[85vw] rounded-3xl p-6 top-[40%]">
+                            <DialogContent className="sm:max-w-xs w-[85vw] rounded-3xl p-6 top-[50%]">
                               <DialogHeader>
                                 <DialogTitle className="text-lg font-bold text-center">계정 관리</DialogTitle>
                                 <DialogDescription className="text-center">
@@ -935,7 +1262,7 @@ export default function GenerateSchedule() {
                     disabled={loading || users.filter(u => u.role !== 'admin').length === 0}
                   >
                     <Trash2 className="w-4 h-4 mr-2" />
-                    관리자 제외 모든 계정 일괄 삭제
+                    관리자 제 모든 계정 일괄 삭제
                   </Button>
                   <p className="text-[10px] text-red-400 mt-2 text-center font-medium">* 이 작업은 되돌릴 수 없으니 주의하십시오.</p>
                 </div>

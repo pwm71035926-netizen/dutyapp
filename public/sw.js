@@ -1,55 +1,56 @@
 const CACHE_NAME = 'gong-dang-cache-v1.1.2';
-const ASSETS_TO_CACHE = [
-  '/',
-  '/index.html',
-  '/manifest.json',
-  '/src/app/App.tsx',
-  // Note: Standard service workers use actual built assets. 
-  // For development/export, we provide a placeholder caching strategy.
-];
 
+// Network-first strategy: always try network, fall back to cache for offline support
 self.addEventListener('install', (event) => {
+  // Activate immediately without waiting for existing clients to close
+  self.skipWaiting();
+});
+
+self.addEventListener('activate', (event) => {
+  // Clean up old caches
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => {
-      return cache.addAll(ASSETS_TO_CACHE);
-    })
+    caches.keys().then((cacheNames) => {
+      return Promise.all(
+        cacheNames
+          .filter((name) => name !== CACHE_NAME)
+          .map((name) => caches.delete(name))
+      );
+    }).then(() => self.clients.claim())
   );
 });
 
 self.addEventListener('fetch', (event) => {
-  event.respondWith(
-    caches.match(event.request).then((response) => {
-      // Return cached version or fetch from network
-      return response || fetch(event.request).then((fetchResponse) => {
-        // Only cache valid responses
-        if (!fetchResponse || fetchResponse.status !== 200 || fetchResponse.type !== 'basic') {
-          return fetchResponse;
-        }
-        
-        const responseToCache = fetchResponse.clone();
-        caches.open(CACHE_NAME).then((cache) => {
-          cache.put(event.request, responseToCache);
-        });
-        
-        return fetchResponse;
-      });
-    }).catch(() => {
-      // Fallback for offline (optional)
-    })
-  );
-});
+  const { request } = event;
 
-self.addEventListener('activate', (event) => {
-  const cacheWhitelist = [CACHE_NAME];
-  event.waitUntil(
-    caches.keys().then((cacheNames) => {
-      return Promise.all(
-        cacheNames.map((cacheName) => {
-          if (cacheWhitelist.indexOf(cacheName) === -1) {
-            return caches.delete(cacheName);
+  // Skip non-GET requests and Supabase API calls (always require fresh data)
+  if (request.method !== 'GET' || request.url.includes('/functions/v1/')) {
+    return;
+  }
+
+  event.respondWith(
+    fetch(request)
+      .then((networkResponse) => {
+        // Cache successful responses for offline fallback
+        if (networkResponse && networkResponse.status === 200) {
+          const responseToCache = networkResponse.clone();
+          caches.open(CACHE_NAME).then((cache) => {
+            cache.put(request, responseToCache);
+          });
+        }
+        return networkResponse;
+      })
+      .catch(() => {
+        // Network failed — serve from cache if available
+        return caches.match(request).then((cachedResponse) => {
+          if (cachedResponse) {
+            return cachedResponse;
           }
-        })
-      );
-    })
+          // For navigation requests, return cached index.html (SPA fallback)
+          if (request.mode === 'navigate') {
+            return caches.match('/index.html');
+          }
+          return new Response('Offline', { status: 503, statusText: 'Service Unavailable' });
+        });
+      })
   );
 });

@@ -8,6 +8,7 @@ import Signup from './pages/Signup';
 import Dashboard from './pages/Dashboard';
 import GenerateSchedule from './pages/GenerateSchedule';
 import SwapRequests from './pages/SwapRequests';
+import NotFound from './pages/NotFound';
 
 export const router = createBrowserRouter([
   {
@@ -29,5 +30,9 @@ export const router = createBrowserRouter([
   {
     path: '/swap-requests',
     Component: SwapRequests,
+  },
+  {
+    path: '*',
+    Component: NotFound,
   },
 ]);

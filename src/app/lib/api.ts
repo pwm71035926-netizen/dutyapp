@@ -428,4 +428,40 @@ export const api = {
     if (!response.ok) throw new Error('단가 수정 실패');
     return response.json();
   },
+
+  async createSwapRequestV2(token: string, year: number, month: number, fromDate: number, toDate: number) {
+    const response = await fetch(`${API_BASE_URL}/swap-requests-v2`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${publicAnonKey}`,
+        'x-user-token': token
+      },
+      body: JSON.stringify({ year, month, fromDate, toDate }),
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || '교환 요청 생성 실패');
+    }
+
+    return response.json();
+  },
+
+  async respondToSwapRequestV2(token: string, requestId: string, action: 'approve' | 'reject' | 'cancel') {
+    const response = await fetch(`${API_BASE_URL}/swap-requests-v2/${requestId}/${action}`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${publicAnonKey}`,
+        'x-user-token': token
+      },
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || '요청 처리 실패');
+    }
+
+    return response.json();
+  },
 };

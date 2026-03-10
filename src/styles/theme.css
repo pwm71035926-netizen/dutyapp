@@ -200,7 +200,7 @@
   }
 }
 
-/* Sonner Center Alignment Override (Centered at 40vh for 'Gong-Dang' UX) */
+/* Sonner Center Alignment Override (Centered at 50vh for 'Gong-Dang' UX) */
 [data-sonner-toaster] {
   display: flex !important;
   align-items: center !important;
@@ -219,7 +219,7 @@
   margin: 0 !important;
   pointer-events: auto !important;
   position: absolute !important;
-  top: 40vh !important; /* Fixed at 40vh as per requirement */
+  top: 50% !important;
   left: 50% !important;
   transform: translate(-50%, -50%) !important;
   --y: 0 !important;
@@ -239,7 +239,6 @@
   align-items: center !important;
   justify-content: center !important;
   color: #1a1a1a !important;
-  border-bottom: 6px solid #6366f1 !important;
 }
 
 [data-sonner-toaster] [data-sonner-toast][data-mounted="true"] {
@@ -252,12 +251,42 @@
 
 @keyframes center-popup-in {
   from { opacity: 0; transform: translate(-50%, -40%) scale(0.9); }
-  to { opacity: 1; transform: translate(-50%, -50%) scale(1.05); }
+  to { opacity: 1; transform: translate(-50%, -50%) scale(1); }
 }
 
 @keyframes center-popup-out {
-  from { opacity: 1; transform: translate(-50%, -50%) scale(1.05); }
+  from { opacity: 1; transform: translate(-50%, -50%) scale(1); }
   to { opacity: 0; transform: translate(-50%, -55%) scale(0.95); }
 }
 
+/* Safe Area Utilities for Android/iOS bottom navigation */
+.pb-safe {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
 
+/* Top safe area utility for status bar (iPhone notch/Dynamic Island, Galaxy punch-hole) */
+.pt-safe {
+  padding-top: env(safe-area-inset-top, 0px);
+}
+
+/* Status bar spacer: covers exactly the safe area inset height */
+.safe-top-spacer {
+  height: env(safe-area-inset-top, 0px);
+  min-height: env(safe-area-inset-top, 0px);
+}
+
+/* Sticky header positioning below safe area */
+.top-safe {
+  top: env(safe-area-inset-top, 0px);
+}
+
+.nav-bottom-safe {
+  padding-bottom: max(12px, env(safe-area-inset-bottom, 12px));
+  /* Galaxy devices: ensure minimum clearance from system nav bar */
+  margin-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+/* Content area bottom spacing to account for fixed bottom nav + safe area */
+.content-bottom-safe {
+  padding-bottom: calc(96px + env(safe-area-inset-bottom, 16px));
+}

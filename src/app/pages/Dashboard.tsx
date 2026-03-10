@@ -1,11 +1,10 @@
-import { useState, useEffect, useRef, useContext, useMemo, useCallback, memo } from 'react';
+import { useState, useEffect, useContext, useMemo, useCallback, memo } from 'react';
 import { useNavigate } from 'react-router';
 import { api } from '../lib/api';
 import { NavigationContext } from '../context/NavigationContext';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
-import { Label } from '../components/ui/label';
 import {
   Dialog,
   DialogContent,
@@ -20,13 +19,6 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from '../components/ui/popover';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '../components/ui/select';
 import { Badge } from '../components/ui/badge';
 import { toast } from 'sonner';
 import {
@@ -38,16 +30,12 @@ import {
   Bell,
   RefreshCw,
   Calendar as CalendarIcon,
-  MessageSquare,
   User as UserIcon,
-  ArrowRight,
   Trash2,
   CheckSquare,
   Square,
   Shield,
   Save,
-  X,
-  BellOff,
   PlusCircle,
   ArrowLeftRight,
   ShieldCheck,
@@ -55,7 +43,8 @@ import {
   Wallet
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { requestNotificationPermission, showNotification, presentPwaInstall } from '../utils/notification';
+import { requestNotificationPermission, showNotification, presentPwaInstall, setDeferredPrompt } from '../utils/notification';
+import { PullToRefresh } from '../components/PullToRefresh';
 
 // Memoized Calendar Day for high performance
 const CalendarDay = memo(({ 
@@ -160,8 +149,6 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [direction, setDirection] = useState(0); // -1 for left, 1 for right
   const [selectedDate, setSelectedDate] = useState<number | null>(new Date().getDate());
-  const [selectedUserId, setSelectedUserId] = useState<string>('');
-  const [swapDialogOpen, setSwapDialogOpen] = useState(false);
   const [notificationDialogOpen, setNotificationDialogOpen] = useState(false);
   const [profileDialogOpen, setProfileDialogOpen] = useState(false);
   const [editProfileMode, setEditProfileMode] = useState(false);
@@ -235,8 +222,13 @@ export default function Dashboard() {
       setNotificationsEnabled(Notification.permission === "granted");
     }
     
-    window.addEventListener('beforeinstallprompt', () => setCanInstallPwa(true));
-    return () => window.removeEventListener('beforeinstallprompt', () => setCanInstallPwa(true));
+    const handleBeforeInstall = (e: Event) => {
+      e.preventDefault();
+      setDeferredPrompt(e);
+      setCanInstallPwa(true);
+    };
+    window.addEventListener('beforeinstallprompt', handleBeforeInstall);
+    return () => window.removeEventListener('beforeinstallprompt', handleBeforeInstall);
   }, []);
 
   const loadPrices = async () => {
@@ -272,6 +264,20 @@ export default function Dashboard() {
       setIsRefreshing(false);
     }
   };
+
+  const handlePullRefresh = useCallback(async () => {
+    if (!token) return;
+    try {
+      await Promise.all([
+        loadDuties(currentDate.getFullYear(), currentDate.getMonth() + 1),
+        loadNotifications(),
+        loadSwapRequests()
+      ]);
+      toast.success('데이터가 새로고침되었습니다.');
+    } catch (error) {
+      toast.error('새로고침 실패');
+    }
+  }, [token, currentDate]);
 
   const handleEnableNotifications = async () => {
     const granted = await requestNotificationPermission();
@@ -386,30 +392,6 @@ export default function Dashboard() {
     setSelectedDate(null);
   };
 
-  const handleSwapRequest = async () => {
-    if (!selectedDate || !selectedUserId || !token || !currentUser) {
-      toast.error('날짜와 교환할 사용자를 선택하세요.');
-      return;
-    }
-
-    const duty = selectedDate ? dutyMap.get(selectedDate) : null;
-    if (!duty) return;
-
-    const toUserId = duty.userId === currentUser.id ? selectedUserId : duty.userId;
-
-    try {
-      const year = currentDate.getFullYear();
-      const month = currentDate.getMonth() + 1;
-      await api.createSwapRequest(token, toUserId, year, month, selectedDate);
-      toast.success('당직 교환 요청을 보냈습니다.');
-      setSwapDialogOpen(false);
-      setSelectedUserId('');
-      loadSwapRequests();
-    } catch (error: any) {
-      toast.error(error.message || '교환 요청 실패');
-    }
-  };
-
   const handleMarkAsRead = async (notificationId: number) => {
     if (!token || isEditMode) return;
     try {
@@ -490,6 +472,23 @@ export default function Dashboard() {
   const pendingReceivedSwaps = swapRequests.filter(r => r.toUserId === currentUser?.id && r.status === 'pending');
   const hasPendingSwaps = pendingReceivedSwaps.length > 0;
 
+  // Memoized callback for CalendarDay onClick to prevent re-renders
+  const handleCalendarDayClick = useCallback((day: number) => {
+    setSelectedDate(day);
+  }, []);
+
+  // Memoize holiday lookup for current month
+  const holidaySet = useMemo(() => {
+    const year = currentDate.getFullYear();
+    const month = currentDate.getMonth() + 1;
+    const set = new Set<number>();
+    const daysInMonth = new Date(year, month, 0).getDate();
+    for (let d = 1; d <= daysInMonth; d++) {
+      if (isKoreanHoliday(year, month, d)) set.add(d);
+    }
+    return set;
+  }, [currentDate, duties]);
+
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50">
@@ -504,19 +503,15 @@ export default function Dashboard() {
   const selectedDuty = selectedDate ? dutyMap.get(selectedDate) : null;
 
   return (
-    <div className="min-h-screen bg-gray-50 pb-20 select-none touch-pan-y">
-      {/* iOS Safe Area Spacer */}
-      <div className="fixed top-0 left-0 right-0 z-50 bg-white h-12 w-full pt-safe" />
-      
-      {/* Pull to refresh indicator simulation */}
-      {isRefreshing && (
-        <div className="fixed top-14 left-1/2 -translate-x-1/2 z-50 bg-indigo-600 text-white px-4 py-2 rounded-full text-xs font-bold shadow-xl animate-bounce flex items-center gap-2">
-           <Loader2 className="w-3 h-3 animate-spin" /> 새로고침 중...
-        </div>
-      )}
+    <>
+    {/* iOS/Android Safe Area Spacer */}
+    <div className="fixed top-0 left-0 right-0 z-50 bg-white safe-top-spacer" />
 
+    <PullToRefresh onRefresh={handlePullRefresh}>
+    <div className="min-h-screen bg-gray-50 content-bottom-safe select-none touch-pan-y">
+      
       {/* Header */}
-      <div className="sticky top-0 z-40 bg-white/80 backdrop-blur-xl border-b border-gray-100 px-6 py-4 flex items-center justify-between pt-14">
+      <div className="sticky top-safe z-40 bg-white/80 backdrop-blur-xl border-b border-gray-100 px-6 py-4 flex items-center justify-between">
         <div className="flex items-center space-x-3 active:scale-95 transition-transform" onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}>
           <div className="p-2 bg-indigo-600 rounded-xl shadow-lg shadow-indigo-100">
             <CalendarDays className="w-5 h-5 text-white" />
@@ -539,7 +534,7 @@ export default function Dashboard() {
                   {unreadCount > 0 && <span className="absolute top-2 right-2 w-2 h-2 bg-indigo-600 rounded-full ring-2 ring-white" />}
                 </button>
               </DialogTrigger>
-              <DialogContent className="sm:max-w-md w-[95vw] rounded-3xl p-0 overflow-hidden bg-white top-[40%]">
+              <DialogContent className="sm:max-w-md w-[95vw] rounded-3xl p-0 overflow-hidden bg-white top-[50%]">
                  <DialogHeader className="p-5 border-b border-gray-100 bg-white flex flex-row items-center justify-between">
                   <div className="space-y-0.5">
                     <DialogTitle className="text-lg font-bold">알림 센터</DialogTitle>
@@ -652,6 +647,7 @@ export default function Dashboard() {
                          <Shield className="w-2.5 h-2.5" />
                          {currentUser?.role === 'admin' ? '관리자' : '일반 대원'}
                       </div>
+                      <p className="text-[9px] font-bold text-white/40 mt-2 tracking-wider">v1.1.2</p>
                    </div>
                 </div>
 
@@ -726,24 +722,6 @@ export default function Dashboard() {
                            <ShieldCheck className="w-4 h-4 mr-3" /> 관리자 도구
                          </Button>
                        )}
-                       <Button 
-                         variant="ghost" 
-                         onClick={async () => {
-                           if (confirm('모든 로컬 캐시와 데이터를 삭제하고 앱을 초기화하시겠습니까?')) {
-                             localStorage.clear();
-                             sessionStorage.clear();
-                             const cacheNames = await caches.keys();
-                             await Promise.all(cacheNames.map(name => caches.delete(name)));
-                             const registrations = await navigator.serviceWorker.getRegistrations();
-                             for(let registration of registrations) await registration.unregister();
-                             toast.success('초기화되었습니다.');
-                             setTimeout(() => window.location.reload(), 1000);
-                           }
-                         }}
-                         className="w-full h-12 justify-start px-3 rounded-2xl hover:bg-orange-50 text-orange-600 font-bold group text-sm"
-                       >
-                         <Trash2 className="w-4 h-4 mr-3 text-orange-400 group-hover:text-orange-600 transition-colors" /> 앱 데이터 초기화
-                       </Button>
                        <div className="h-px bg-gray-100 my-1 mx-2" />
                        <Button 
                          variant="ghost" 
@@ -771,7 +749,7 @@ export default function Dashboard() {
           <div className="flex items-center justify-between bg-white p-2 rounded-2xl border border-gray-100 shadow-sm">
             <button onClick={previousMonth} className="w-10 h-10 flex items-center justify-center text-gray-400 hover:text-indigo-600 active:scale-95 transition-all"><ChevronLeft className="w-6 h-6" /></button>
             <div className="flex flex-col items-center">
-              <span className="text-xs font-black text-indigo-600 uppercase tracking-widest">{currentDate.getFullYear()}년 v1.1.2</span>
+              <span className="text-xs font-black text-indigo-600 uppercase tracking-widest">{currentDate.getFullYear()}년</span>
               <span className="text-lg font-bold text-gray-900">{currentDate.getMonth() + 1}월</span>
             </div>
             <button onClick={nextMonth} className="w-10 h-10 flex items-center justify-center text-gray-400 hover:text-indigo-600 active:scale-95 transition-all"><ChevronRight className="w-6 h-6" /></button>
@@ -795,18 +773,23 @@ export default function Dashboard() {
                       transition={{ type: "spring", stiffness: 500, damping: 40 }}
                       className="grid grid-cols-7 gap-1.5"
                     >
-                      {daysInMonthList.map((day, index) => (
-                        <CalendarDay
-                          key={index}
-                          index={index}
-                          day={day}
-                          duty={day ? dutyMap.get(day) : null}
-                          isSelected={selectedDate === day}
-                          isToday={day === new Date().getDate() && currentDate.getMonth() === new Date().getMonth() && currentDate.getFullYear() === new Date().getFullYear()}
-                          isHoliday={day ? isKoreanHoliday(currentDate.getFullYear(), currentDate.getMonth() + 1, day) : false}
-                          onClick={(d) => setSelectedDate(d)}
-                        />
-                      ))}
+                      {(() => {
+                        const today = new Date();
+                        const todayDate = today.getDate();
+                        const isCurrentMonth = currentDate.getMonth() === today.getMonth() && currentDate.getFullYear() === today.getFullYear();
+                        return daysInMonthList.map((day, index) => (
+                          <CalendarDay
+                            key={index}
+                            index={index}
+                            day={day}
+                            duty={day ? dutyMap.get(day) : null}
+                            isSelected={selectedDate === day}
+                            isToday={isCurrentMonth && day === todayDate}
+                            isHoliday={day ? holidaySet.has(day) : false}
+                            onClick={handleCalendarDayClick}
+                          />
+                        ));
+                      })()}
                     </motion.div>
                 </AnimatePresence>
               </div>
@@ -855,40 +838,24 @@ export default function Dashboard() {
                           {selectedDuty.userId === currentUser?.id && <Badge className="bg-orange-500 text-white rounded-lg px-2 py-0.5 text-[10px]">내 당직</Badge>}
                         </div>
                         <div className="flex items-center gap-2">
-                          <Dialog open={swapDialogOpen} onOpenChange={setSwapDialogOpen}>
-                            <DialogTrigger asChild>
-                              <Button size="sm" variant="outline" className="rounded-xl text-xs h-8">교환 요청</Button>
-                            </DialogTrigger>
-                            <DialogContent className="sm:max-w-md w-[90vw] rounded-3xl p-6 bg-white border border-gray-100 shadow-2xl top-[40%]">
-                              <DialogHeader>
-                                <DialogTitle className="text-xl font-bold">당직 교환 요청</DialogTitle>
-                                <DialogDescription>{selectedDate}일 당직을 교환할 사용자를 선택하세요.</DialogDescription>
-                              </DialogHeader>
-                              <div className="space-y-6 py-4">
-                                <div className="space-y-2">
-                                  <Label className="text-xs font-bold uppercase tracking-wider text-gray-500">
-                                    {selectedDuty.userId === currentUser?.id ? '이 당직을 맡을 사람' : '이 당직을 요청할 사람 (본인)'}
-                                  </Label>
-                                  <Select value={selectedUserId} onValueChange={setSelectedUserId}>
-                                    <SelectTrigger className="h-12 rounded-xl border-gray-100 bg-gray-50"><SelectValue placeholder="사용자 선택" /></SelectTrigger>
-                                    <SelectContent className="rounded-2xl border-gray-100 shadow-xl bg-white">
-                                      {selectedDuty.userId === currentUser?.id ? (
-                                        users.filter(u => u.id !== currentUser?.id).map(user => (
-                                          <SelectItem key={user.id} value={user.id} className="rounded-lg">{user.name} ({user.email})</SelectItem>
-                                        ))
-                                      ) : (
-                                        <SelectItem key={currentUser?.id} value={currentUser?.id || 'me'} className="rounded-lg">{currentUser?.name} (본인)</SelectItem>
-                                      )}
-                                    </SelectContent>
-                                  </Select>
-                                </div>
-                                <div className="flex flex-col space-y-2">
-                                  <Button onClick={handleSwapRequest} className="h-12 rounded-xl bg-indigo-600 font-bold text-white">요청 보내기</Button>
-                                  <Button variant="ghost" onClick={() => setSwapDialogOpen(false)} className="h-12 rounded-xl text-gray-500 font-medium">취소</Button>
-                                </div>
-                              </div>
-                            </DialogContent>
-                          </Dialog>
+                          {selectedDuty.userId === currentUser?.id && (
+                            <Button 
+                              size="sm" 
+                              variant="outline" 
+                              className="rounded-xl text-xs h-8"
+                              onClick={() => {
+                                const params = new URLSearchParams({
+                                  fromDate: String(selectedDate),
+                                  year: String(currentDate.getFullYear()),
+                                  month: String(currentDate.getMonth() + 1),
+                                });
+                                startNavigation(`/swap-requests?${params.toString()}`, navigate);
+                              }}
+                            >
+                              <ArrowLeftRight className="w-3 h-3 mr-1" />
+                              교환 요청
+                            </Button>
+                          )}
                         </div>
                       </div>
                     </>
@@ -949,8 +916,11 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* Mobile Bottom Navigation */}
-      <nav className="fixed bottom-0 left-0 right-0 z-40 bg-white/95 backdrop-blur-md border-t border-gray-100 px-6 py-2 flex items-center justify-between max-w-lg mx-auto w-full h-20 rounded-t-[32px] shadow-[0_-10px_40px_rgba(0,0,0,0.05)] pb-safe">
+    </div>
+    </PullToRefresh>
+
+    {/* Mobile Bottom Navigation */}
+    <nav className="fixed bottom-0 left-0 right-0 z-40 bg-white/95 backdrop-blur-md border-t border-gray-100 px-6 pt-2 flex items-center justify-between max-w-lg mx-auto w-full rounded-t-[32px] shadow-[0_-10px_40px_rgba(0,0,0,0.05)] nav-bottom-safe" style={{ minHeight: '80px' }}>
         <button onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })} className="flex flex-col items-center justify-center space-y-1.5 flex-1 transition-all text-indigo-600 active:scale-90">
           <CalendarIcon className="w-6 h-6" />
           <span className="text-[10px] font-black uppercase tracking-tight">당직일정</span>
@@ -978,6 +948,6 @@ export default function Dashboard() {
         onConfirm={confirmState.onConfirm}
         variant={confirmState.variant}
       />
-    </div>
+    </>
   );
 }

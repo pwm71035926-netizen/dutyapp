@@ -35,13 +35,9 @@ export const showNotification = (title: string, options?: NotificationOptions) =
  */
 let deferredPrompt: any;
 
-export const initPwaInstallPrompt = () => {
-  window.addEventListener('beforeinstallprompt', (e) => {
-    // 기본 프롬프트 방지
-    e.preventDefault();
-    // 이벤트를 나중에 사용하기 위해 저장
-    deferredPrompt = e;
-  });
+/** Dashboard의 beforeinstallprompt 핸들러에서 호출하여 이벤트를 저장 */
+export const setDeferredPrompt = (e: any) => {
+  deferredPrompt = e;
 };
 
 export const presentPwaInstall = async () => {

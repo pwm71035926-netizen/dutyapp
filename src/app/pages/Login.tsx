@@ -121,7 +121,7 @@ export default function Login() {
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50 p-4 pt-14 select-none overflow-hidden">
-      <div className="fixed top-0 left-0 right-0 z-50 bg-white h-12 w-full pt-safe" />
+      <div className="fixed top-0 left-0 right-0 z-50 bg-white safe-top-spacer" />
 
       <div className="w-full max-w-md animate-in fade-in zoom-in duration-700">
         <Card className="border-none shadow-[0_20px_60px_-15px_rgba(0,0,0,0.1)] rounded-[40px] overflow-hidden bg-white/80 backdrop-blur-xl border border-white">
