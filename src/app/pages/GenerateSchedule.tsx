@@ -11,9 +11,9 @@ import { toast } from 'sonner';
 import { 
   ArrowLeft, 
   CalendarPlus, 
-  GripVertical, 
+
   Info, 
-  User as UserIcon, 
+
   Users, 
   ShieldCheck, 
   Trash2, 
@@ -30,7 +30,7 @@ import {
   Loader2,
   Check
 } from 'lucide-react';
-import { motion, Reorder, AnimatePresence } from 'motion/react';
+import { motion, AnimatePresence } from 'motion/react';
 import {
   Dialog,
   DialogContent,
@@ -66,6 +66,13 @@ export default function GenerateSchedule() {
   const [weekdaySequence, setWeekdaySequence] = useState<string[]>([]);
   const [weekendSequence, setWeekendSequence] = useState<string[]>([]);
   
+  // States for starting person selection
+  const [weekdayStartUserId, setWeekdayStartUserId] = useState<string>('');
+  const [weekendStartUserId, setWeekendStartUserId] = useState<string>('');
+  
+  // Friday as weekend toggle (default: true = 금요일을 주말근무로 편성)
+  const [fridayAsWeekend, setFridayAsWeekend] = useState<boolean>(true);
+  
   // States for exclusion periods
   const [exclusions, setExclusions] = useState<{userId: string, startDate: string, endDate: string}[]>([]);
   const [newExclusion, setNewExclusion] = useState({ 
@@ -89,6 +96,9 @@ export default function GenerateSchedule() {
   const [loading, setLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   
+  // State for editing service number
+  const [editingServiceNumber, setEditingServiceNumber] = useState<{userId: string, value: string} | null>(null);
+
   // States for duty prices
   const [dutyPrices, setDutyPrices] = useState({ weekday: 30000, weekend: 100000 });
   const [isUpdatingPrices, setIsUpdatingPrices] = useState(false);
@@ -175,10 +185,53 @@ export default function GenerateSchedule() {
         return seqA - seqB;
       });
       setUsers(sortedUsers);
+
+      // 모든 사용자를 자동으로 평일/주말 순번에 포함
+      const allIds = sortedUsers.map(u => u.id);
+      setWeekdaySequence(sortByServiceNumberFromList(allIds, 'asc', sortedUsers));
+      setWeekendSequence(sortByServiceNumberFromList(allIds, 'asc', sortedUsers));
     } catch (error: any) {
       console.error('Failed to load data:', error);
       toast.error('데이터를 불러오지 못했습니다.');
       startNavigation('/dashboard', navigate);
+    }
+  };
+
+  // Helper: sort user IDs by service number using a provided user list
+  const sortByServiceNumberFromList = (userIds: string[], direction: 'asc' | 'desc', userList: User[]): string[] => {
+    return [...userIds].sort((a, b) => {
+      const userA = userList.find(u => u.id === a);
+      const userB = userList.find(u => u.id === b);
+      if (!userA?.serviceNumber) return 1;
+      if (!userB?.serviceNumber) return -1;
+      const [yearA, seqA] = userA.serviceNumber.split('-').map(Number);
+      const [yearB, seqB] = userB.serviceNumber.split('-').map(Number);
+      const cmp = yearA !== yearB ? yearA - yearB : seqA - seqB;
+      return direction === 'asc' ? cmp : -cmp;
+    });
+  };
+
+  const handleSaveServiceNumber = async () => {
+    if (!token || !editingServiceNumber) return;
+    setActionLoading(editingServiceNumber.userId);
+    try {
+      await api.updateUserServiceNumber(token, editingServiceNumber.userId, editingServiceNumber.value);
+      toast.success('군번이 수정되었습니다.');
+      setEditingServiceNumber(null);
+      const { users: allUsers } = await api.getUsers(token);
+      const sortedUsers = [...allUsers].sort((a: User, b: User) => {
+        if (!a.serviceNumber) return 1;
+        if (!b.serviceNumber) return -1;
+        const [yearA, seqA] = a.serviceNumber.split('-').map(Number);
+        const [yearB, seqB] = b.serviceNumber.split('-').map(Number);
+        if (yearA !== yearB) return yearA - yearB;
+        return seqA - seqB;
+      });
+      setUsers(sortedUsers);
+    } catch (error: any) {
+      toast.error(error.message || '군번 수정 실패');
+    } finally {
+      setActionLoading(null);
     }
   };
 
@@ -251,7 +304,7 @@ export default function GenerateSchedule() {
     setConfirmState({
       open: true,
       title: '일반 사용자 일괄 삭제',
-      description: `관리자를 제외한 모든 사용자(${nonAdmins.length}명)를 정말로 삭제하시겠습니까?\n이 작업은 되돌릴 수 없으며, 모든 일반 대원은 즉시 로그인이 차단됩니다.`,
+      description: `관리자를 제외한 모든 사용자(${nonAdmins.length}명)를 정말로 삭제하시겠습니까?\n이 작업은 되돌릴 수 없으며, 모든 일반사용자는 즉시 로그인이 차단됩니다.`,
       variant: 'destructive',
       onConfirm: async () => {
         setLoading(true);
@@ -269,20 +322,37 @@ export default function GenerateSchedule() {
     });
   };
 
-  const toggleWeekdayUser = (userId: string) => {
-    if (weekdaySequence.includes(userId)) {
-      setWeekdaySequence(weekdaySequence.filter(id => id !== userId));
-    } else {
-      setWeekdaySequence([...weekdaySequence, userId]);
-    }
+  // Helper: sort user IDs by service number
+  const sortByServiceNumber = (userIds: string[], direction: 'asc' | 'desc'): string[] => {
+    return [...userIds].sort((a, b) => {
+      const userA = users.find(u => u.id === a);
+      const userB = users.find(u => u.id === b);
+      if (!userA?.serviceNumber) return 1;
+      if (!userB?.serviceNumber) return -1;
+      const [yearA, seqA] = userA.serviceNumber.split('-').map(Number);
+      const [yearB, seqB] = userB.serviceNumber.split('-').map(Number);
+      const cmp = yearA !== yearB ? yearA - yearB : seqA - seqB;
+      return direction === 'asc' ? cmp : -cmp;
+    });
   };
 
-  const toggleWeekendUser = (userId: string) => {
-    if (weekendSequence.includes(userId)) {
-      setWeekendSequence(weekendSequence.filter(id => id !== userId));
-    } else {
-      setWeekendSequence([...weekendSequence, userId]);
-    }
+  // Helper: rotate array so startId is first
+  const rotateSequence = (sortedIds: string[], startId: string): string[] => {
+    if (!startId || !sortedIds.includes(startId)) return sortedIds;
+    const idx = sortedIds.indexOf(startId);
+    return [...sortedIds.slice(idx), ...sortedIds.slice(0, idx)];
+  };
+
+  // Get the final ordered sequence for weekday (asc sorted, rotated by start user)
+  const getWeekdayFinalSequence = (): string[] => {
+    const sorted = sortByServiceNumber(weekdaySequence, 'asc');
+    return rotateSequence(sorted, weekdayStartUserId);
+  };
+
+  // Get the final ordered sequence for weekend (asc sorted, rotated by start user)
+  const getWeekendFinalSequence = (): string[] => {
+    const sorted = sortByServiceNumber(weekendSequence, 'asc');
+    return rotateSequence(sorted, weekendStartUserId);
   };
 
   const handleGenerate = async () => {
@@ -295,7 +365,9 @@ export default function GenerateSchedule() {
 
     setLoading(true);
     try {
-      await api.generateDuties(token, year, month, weekdaySequence, weekendSequence, exclusions, customHolidays);
+      const finalWeekday = getWeekdayFinalSequence();
+      const finalWeekend = getWeekendFinalSequence();
+      await api.generateDuties(token, year, month, finalWeekday, finalWeekend, exclusions, customHolidays, fridayAsWeekend);
       toast.success('당직 일정이 성공적으로 생성되었습니다!');
       startNavigation('/dashboard', navigate);
     } catch (error: any) {
@@ -688,6 +760,40 @@ export default function GenerateSchedule() {
                 </CardContent>
               </Card>
 
+              {/* Friday Weekend Toggle */}
+              <Card className="border-none shadow-sm rounded-2xl overflow-hidden bg-white">
+                <CardContent className="p-5">
+                  <label className="flex items-center justify-between cursor-pointer">
+                    <div className="flex items-center gap-3">
+                      <div className="p-2 bg-orange-100 rounded-xl">
+                        <CalendarDays className="w-4 h-4 text-orange-600" />
+                      </div>
+                      <div>
+                        <p className="text-sm font-bold text-gray-900">금요일 주말근무 편성</p>
+                        <p className="text-[10px] text-gray-400 mt-0.5">
+                          {fridayAsWeekend ? '금요일이 주말 순번으로 배정됩니다' : '금요일이 평일 순번으로 배정됩니다'}
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={fridayAsWeekend}
+                      onClick={() => setFridayAsWeekend(!fridayAsWeekend)}
+                      className={`relative inline-flex h-7 w-12 shrink-0 rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                        fridayAsWeekend ? 'bg-orange-500' : 'bg-gray-200'
+                      }`}
+                    >
+                      <span
+                        className={`pointer-events-none inline-block h-6 w-6 transform rounded-full bg-white shadow-lg ring-0 transition-transform duration-200 ease-in-out ${
+                          fridayAsWeekend ? 'translate-x-5' : 'translate-x-0'
+                        }`}
+                      />
+                    </button>
+                  </label>
+                </CardContent>
+              </Card>
+
               {/* Custom Holidays Card */}
               <Card className="border-none shadow-sm rounded-2xl overflow-hidden bg-white">
                 <CardHeader className="p-5 pb-2">
@@ -819,59 +925,66 @@ export default function GenerateSchedule() {
                     <div className="w-1 h-4 bg-blue-500 rounded-full" />
                     평일 당직 순번
                   </h3>
-                  <span className="text-xs font-medium text-gray-400">{weekdaySequence.length}명 선택됨</span>
+                  <span className="text-xs font-medium text-gray-400">{weekdaySequence.length}명</span>
                 </div>
                 
                 <Card className="border-none shadow-sm rounded-2xl bg-white overflow-hidden">
                    <CardContent className="p-4 space-y-4">
-                     <div className="flex flex-wrap gap-2">
-                       {users.map((user) => (
-                         <button
-                           key={`select-weekday-${user.id}`}
-                           onClick={() => toggleWeekdayUser(user.id)}
-                           className={`px-3 py-1.5 rounded-full text-[10px] font-bold transition-all ${
-                             weekdaySequence.includes(user.id)
-                               ? 'bg-blue-100 text-blue-700 ring-1 ring-blue-300'
-                               : 'bg-gray-50 text-gray-500 hover:bg-gray-100'
-                           }`}
-                         >
-                           {user.name}
-                           {user.serviceNumber && <span className="ml-1 opacity-60 font-mono">({user.serviceNumber})</span>}
-                         </button>
-                       ))}
+                     <div className="p-3 bg-blue-50/50 rounded-xl border border-blue-100 hidden">
+                       <p className="text-[10px] text-blue-600 font-bold mb-1">자동 정렬: 군번 낮은 순 → 높은 순 (오름차순)</p>
+                       <p className="text-[10px] text-blue-500/70">모든 대원이 자동으로 포함되며 군번 기준으로 정렬됩니다.</p>
                      </div>
 
+                     {/* Starting person selector */}
                      {weekdaySequence.length > 0 && (
-                       <div className="pt-4 border-t border-gray-50">
-                          <div className="flex items-center gap-1.5 text-[10px] text-gray-400 font-bold uppercase tracking-widest mb-3">
-                            <GripVertical className="w-3 h-3" />
-                            드래그하여 순서 조정
-                          </div>
-                          <Reorder.Group 
-                            axis="y" 
-                            values={weekdaySequence} 
-                            onReorder={setWeekdaySequence}
-                            className="space-y-2"
-                          >
-                            {weekdaySequence.map((id) => {
-                              const user = getUserById(id);
-                              return (
-                                <Reorder.Item
-                                  key={id}
-                                  value={id}
-                                  className="flex items-center justify-between p-3 bg-white border border-gray-100 rounded-xl shadow-sm cursor-grab active:cursor-grabbing"
-                                >
-                                  <div className="flex items-center gap-3">
-                                    <div className="w-8 h-8 bg-blue-50 rounded-full flex items-center justify-center text-blue-600">
-                                      <UserIcon className="w-4 h-4" />
-                                    </div>
-                                    <span className="text-sm font-bold text-gray-700">{user?.name}</span>
-                                  </div>
-                                  <GripVertical className="w-4 h-4 text-gray-300" />
-                                </Reorder.Item>
-                              );
-                            })}
-                          </Reorder.Group>
+                       <div className="space-y-1.5">
+                         <Label className="text-[10px] font-bold text-blue-500 uppercase tracking-wider">
+                           {month}월 첫 평일 시작 인원 선택
+                         </Label>
+                         <select
+                           value={weekdayStartUserId}
+                           onChange={(e) => setWeekdayStartUserId(e.target.value)}
+                           className="w-full h-11 px-3 rounded-xl border border-blue-100 bg-blue-50/30 text-sm font-bold focus:ring-2 focus:ring-blue-500 outline-none transition-all"
+                         >
+                           <option value="">순번 1번부터 시작 (기본)</option>
+                           {sortByServiceNumber(weekdaySequence, 'asc').map((id) => {
+                             const user = getUserById(id);
+                             return (
+                               <option key={id} value={id}>
+                                 {user?.name} {user?.serviceNumber ? `(${user.serviceNumber})` : ''}
+                               </option>
+                             );
+                           })}
+                         </select>
+                       </div>
+                     )}
+
+                     {/* Auto-sorted sequence flow display (reflects starting person rotation) */}
+                     {weekdaySequence.length > 0 && (
+                       <div className="p-3 bg-gray-50 rounded-xl">
+                         <div className="flex items-center gap-1.5 text-[10px] text-gray-400 font-bold uppercase tracking-widest mb-2">
+                           <CalendarDays className="w-3 h-3" />
+                           배정 순서 미리보기
+                         </div>
+                         <div className="flex flex-wrap items-center gap-1">
+                           {getWeekdayFinalSequence().map((id, idx, arr) => {
+                             const user = getUserById(id);
+                             return (
+                               <span key={id} className="inline-flex items-center">
+                                 <span className={`px-2 py-1 rounded-lg text-[11px] font-bold ${
+                                   idx === 0 
+                                     ? 'bg-blue-600 text-white' 
+                                     : 'bg-blue-100 text-blue-700'
+                                 }`}>
+                                   {user?.name}
+                                 </span>
+                                 {idx < arr.length - 1 && (
+                                   <ChevronRight className="w-3 h-3 text-gray-300 mx-0.5 shrink-0" />
+                                 )}
+                               </span>
+                             );
+                           })}
+                         </div>
                        </div>
                      )}
                    </CardContent>
@@ -885,59 +998,66 @@ export default function GenerateSchedule() {
                     <div className="w-1 h-4 bg-red-500 rounded-full" />
                     주말 당직 순번
                   </h3>
-                  <span className="text-xs font-medium text-gray-400">{weekendSequence.length}명 선택됨</span>
+                  <span className="text-xs font-medium text-gray-400">{weekendSequence.length}명</span>
                 </div>
                 
                 <Card className="border-none shadow-sm rounded-2xl bg-white overflow-hidden">
                    <CardContent className="p-4 space-y-4">
-                     <div className="flex flex-wrap gap-2">
-                       {users.map((user) => (
-                         <button
-                           key={`select-weekend-${user.id}`}
-                           onClick={() => toggleWeekendUser(user.id)}
-                           className={`px-3 py-1.5 rounded-full text-[10px] font-bold transition-all ${
-                             weekendSequence.includes(user.id)
-                               ? 'bg-red-100 text-red-700 ring-1 ring-red-300'
-                               : 'bg-gray-50 text-gray-500 hover:bg-gray-100'
-                           }`}
-                         >
-                           {user.name}
-                           {user.serviceNumber && <span className="ml-1 opacity-60 font-mono">({user.serviceNumber})</span>}
-                         </button>
-                       ))}
+                     <div className="p-3 bg-red-50/50 rounded-xl border border-red-100 hidden">
+                       <p className="text-[10px] text-red-600 font-bold mb-1">자동 정렬: 군번 낮은 순 → 높은 순 (오름차순)</p>
+                       <p className="text-[10px] text-red-500/70">모든 대원이 자동으로 포함되며 군번 기준으로 정렬됩니다.</p>
                      </div>
 
+                     {/* Starting person selector */}
                      {weekendSequence.length > 0 && (
-                       <div className="pt-4 border-t border-gray-50">
-                          <div className="flex items-center gap-1.5 text-[10px] text-gray-400 font-bold uppercase tracking-widest mb-3">
-                            <GripVertical className="w-3 h-3" />
-                            드래그하여 순서 조정
-                          </div>
-                          <Reorder.Group 
-                            axis="y" 
-                            values={weekendSequence} 
-                            onReorder={setWeekendSequence}
-                            className="space-y-2"
-                          >
-                            {weekendSequence.map((id) => {
-                              const user = getUserById(id);
-                              return (
-                                <Reorder.Item
-                                  key={id}
-                                  value={id}
-                                  className="flex items-center justify-between p-3 bg-white border border-gray-100 rounded-xl shadow-sm cursor-grab active:cursor-grabbing"
-                                >
-                                  <div className="flex items-center gap-3">
-                                    <div className="w-8 h-8 bg-red-50 rounded-full flex items-center justify-center text-red-600">
-                                      <UserIcon className="w-4 h-4" />
-                                    </div>
-                                    <span className="text-sm font-bold text-gray-700">{user?.name}</span>
-                                  </div>
-                                  <GripVertical className="w-4 h-4 text-gray-300" />
-                                </Reorder.Item>
-                              );
-                            })}
-                          </Reorder.Group>
+                       <div className="space-y-1.5">
+                         <Label className="text-[10px] font-bold text-red-500 uppercase tracking-wider">
+                           {month}월 첫 주말 시작 인원 선택
+                         </Label>
+                         <select
+                           value={weekendStartUserId}
+                           onChange={(e) => setWeekendStartUserId(e.target.value)}
+                           className="w-full h-11 px-3 rounded-xl border border-red-100 bg-red-50/30 text-sm font-bold focus:ring-2 focus:ring-red-500 outline-none transition-all"
+                         >
+                           <option value="">순번 1번부터 시작 (기본)</option>
+                           {sortByServiceNumber(weekendSequence, 'asc').map((id) => {
+                             const user = getUserById(id);
+                             return (
+                               <option key={id} value={id}>
+                                 {user?.name} {user?.serviceNumber ? `(${user.serviceNumber})` : ''}
+                               </option>
+                             );
+                           })}
+                         </select>
+                       </div>
+                     )}
+
+                     {/* Auto-sorted sequence flow display (reflects starting person rotation) */}
+                     {weekendSequence.length > 0 && (
+                       <div className="p-3 bg-gray-50 rounded-xl">
+                         <div className="flex items-center gap-1.5 text-[10px] text-gray-400 font-bold uppercase tracking-widest mb-2">
+                           <CalendarDays className="w-3 h-3" />
+                           배정 순서 미리보기
+                         </div>
+                         <div className="flex flex-wrap items-center gap-1">
+                           {getWeekendFinalSequence().map((id, idx, arr) => {
+                             const user = getUserById(id);
+                             return (
+                               <span key={id} className="inline-flex items-center">
+                                 <span className={`px-2 py-1 rounded-lg text-[11px] font-bold ${
+                                   idx === 0 
+                                     ? 'bg-red-600 text-white' 
+                                     : 'bg-red-100 text-red-700'
+                                 }`}>
+                                   {user?.name}
+                                 </span>
+                                 {idx < arr.length - 1 && (
+                                   <ChevronRight className="w-3 h-3 text-gray-300 mx-0.5 shrink-0" />
+                                 )}
+                               </span>
+                             );
+                           })}
+                         </div>
                        </div>
                      )}
                    </CardContent>
@@ -947,7 +1067,7 @@ export default function GenerateSchedule() {
               <div className="bg-amber-50 border border-amber-100 p-4 rounded-2xl flex gap-3">
                 <Info className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
                 <p className="text-xs text-amber-700 leading-relaxed font-medium">
-                  선택된 순서대로 당직이 순환 배정됩니다. 첫 번째 사람이 첫 번째 당직 날짜(평일/주말 구분)를 맡게 됩니다.
+                  시작 인원을 선택하면 해당 인원부터 순환 배정되며, 순번 미리보기가 즉시 반영됩니다.
                 </p>
               </div>
 
@@ -1201,7 +1321,7 @@ export default function GenerateSchedule() {
                         <div className="flex items-center gap-1">
                            <Dialog>
                             <DialogTrigger asChild>
-                              <Button variant="ghost" size="icon" className="rounded-xl text-gray-400">
+                              <Button variant="ghost" size="icon" className="rounded-xl bg-white text-gray-400 hover:bg-gray-100">
                                 <MoreVertical className="w-4 h-4" />
                               </Button>
                             </DialogTrigger>
@@ -1209,10 +1329,42 @@ export default function GenerateSchedule() {
                               <DialogHeader>
                                 <DialogTitle className="text-lg font-bold text-center">계정 관리</DialogTitle>
                                 <DialogDescription className="text-center">
-                                  {user.name} ({user.role === 'admin' ? '관리자' : '일반'})
+                                  {user.name} ({user.role === 'admin' ? '관리자' : '일반사용자'})
                                 </DialogDescription>
                               </DialogHeader>
                               <div className="flex flex-col gap-3 py-4">
+                                <div className="space-y-1.5">
+                                  <Label className="text-[10px] font-black uppercase tracking-widest text-indigo-600 ml-1">군번</Label>
+                                  <div className="flex gap-2">
+                                    <Input
+                                      value={editingServiceNumber?.userId === user.id ? editingServiceNumber.value : (user.serviceNumber || '')}
+                                      onChange={(e) => {
+                                        const val = e.target.value.replace(/[^0-9]/g, '');
+                                        let formatted = val;
+                                        if (val.length > 2) {
+                                          formatted = val.slice(0, 2) + '-' + val.slice(2, 8);
+                                        }
+                                        setEditingServiceNumber({ userId: user.id, value: formatted });
+                                      }}
+                                      onFocus={() => {
+                                        if (!editingServiceNumber || editingServiceNumber.userId !== user.id) {
+                                          setEditingServiceNumber({ userId: user.id, value: user.serviceNumber || '' });
+                                        }
+                                      }}
+                                      className="h-10 rounded-xl border-gray-100 bg-gray-50 font-mono text-sm flex-1"
+                                      placeholder="00-000000"
+                                    />
+                                    <Button
+                                      size="sm"
+                                      className="h-10 rounded-xl bg-indigo-600 text-white px-3"
+                                      onClick={handleSaveServiceNumber}
+                                      disabled={actionLoading === user.id || !editingServiceNumber || editingServiceNumber.userId !== user.id}
+                                    >
+                                      <Save className="w-3.5 h-3.5" />
+                                    </Button>
+                                  </div>
+                                </div>
+                                <div className="h-px bg-gray-100" />
                                 <Button 
                                   variant="outline" 
                                   className="h-12 rounded-xl font-bold flex items-center justify-start px-4 gap-3 border-gray-100"
@@ -1220,7 +1372,7 @@ export default function GenerateSchedule() {
                                   disabled={actionLoading === user.id}
                                 >
                                   <ShieldAlert className="w-4 h-4 text-indigo-600" />
-                                  {user.role === 'admin' ? '일반 계정으로 변경' : '관리자로 권한 부여'}
+                                  {user.role === 'admin' ? '일반사용자로 변경' : '관리자로 권한 부여'}
                                 </Button>
                                 {user.id !== currentUser?.id && (
                                   <Button 

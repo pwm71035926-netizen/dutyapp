@@ -89,7 +89,7 @@ const SwapCalendarDay = memo(({
           : isSelected
             ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-200'
             : isMyDuty
-              ? 'bg-orange-50 ring-1 ring-orange-200'
+              ? 'bg-indigo-50 ring-1 ring-indigo-200'
               : isToday
                 ? 'bg-indigo-50 ring-1 ring-indigo-200'
                 : duty
@@ -116,7 +116,7 @@ const SwapCalendarDay = memo(({
       {duty && !isFromDate && !isSelected && (
         <div
           className={`w-1 h-1 rounded-full mt-0.5 ${
-            isMyDuty ? 'bg-orange-500' : 'bg-gray-300'
+            isMyDuty ? 'bg-indigo-500' : 'bg-gray-300'
           }`}
         />
       )}
@@ -610,7 +610,7 @@ export default function SwapRequests() {
                       {/* Legend */}
                       <div className="flex items-center gap-4 mt-3 pt-3 border-t border-gray-50">
                         <div className="flex items-center gap-1.5">
-                          <div className="w-3 h-3 bg-orange-500 rounded" />
+                          <div className="w-3 h-3 bg-indigo-500 rounded" />
                           <span className="text-[9px] font-bold text-gray-400">내 당직</span>
                         </div>
                         <div className="flex items-center gap-1.5">

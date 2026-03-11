@@ -295,7 +295,7 @@ app.post('/make-server-a032f464/duties/generate', async (c) => {
     const userData = await kv.get(`user:${user.id}`);
     if (userData?.role !== 'admin') return c.json({ error: 'Admin only' }, 403);
 
-    const { year, month, weekdayUsers, weekendUsers, exclusions = [], customHolidays = [] } = await c.req.json();
+    const { year, month, weekdayUsers, weekendUsers, exclusions = [], customHolidays = [], fridayAsWeekend = true } = await c.req.json();
     
     const allUserData = await kv.getByPrefix('user:');
     const userMap = new Map(allUserData.map(u => [u.id, u]));
@@ -303,10 +303,10 @@ app.post('/make-server-a032f464/duties/generate', async (c) => {
     const daysInMonth = new Date(year, month, 0).getDate();
     const duties = [];
     
-    // Carry-over pointer logic: Load last indices from KV
-    const lastPointers = await kv.get('duty-pointers') || { wdIdx: 0, weIdx: 0 };
-    let wdIdx = lastPointers.wdIdx || 0;
-    let weIdx = lastPointers.weIdx || 0;
+    // The frontend already rotates the sequence based on the selected start user,
+    // so we always start from index 0 of the received sequences.
+    let wdIdx = 0;
+    let weIdx = 0;
 
     // Helper to check if a date is a custom holiday
     const isCustomHoliday = (dateObj: Date) => {
@@ -330,10 +330,15 @@ app.post('/make-server-a032f464/duties/generate', async (c) => {
 
     for (let d = 1; d <= daysInMonth; d++) {
       const date = new Date(year, month - 1, d);
-      const isWeekend = date.getDay() === 0 || date.getDay() === 6;
+      const dayOfWeek = date.getDay(); // 0=일, 5=금, 6=토
+      const isWeekend = fridayAsWeekend
+        ? (dayOfWeek === 0 || dayOfWeek === 5 || dayOfWeek === 6) // 금토일
+        : (dayOfWeek === 0 || dayOfWeek === 6); // 토일만
       const isOfficialHoliday = isKoreanHoliday(year, month, d);
       const isCustomHoli = isCustomHoliday(date);
       const isHoliday = isOfficialHoliday || isCustomHoli;
+      
+      // 금토일 또는 공휴일은 주말 순번 사용
       const isWE = isWeekend || isHoliday;
       
       const sequence = isWE ? weekendUsers : weekdayUsers;
@@ -364,7 +369,7 @@ app.post('/make-server-a032f464/duties/generate', async (c) => {
         userId: selectedUid, 
         userName: uInfo?.name || 'Unknown', 
         type: isWE ? 'weekend' : 'weekday',
-        isHoliday: isHoliday
+        isHoliday: isHoliday  // 공휴일은 실제 공휴일만 표시
       });
     }
 
@@ -554,6 +559,38 @@ app.post('/make-server-a032f464/users/:userId/role', async (c) => {
 
     return c.json({ success: true, user: updatedUser });
   } catch (error: any) {
+    return c.json({ error: error.message }, 500);
+  }
+});
+
+// 관리자 전용: 사용자 군번 수정
+app.post('/make-server-a032f464/users/:userId/service-number', async (c) => {
+  try {
+    const user = await verifyUser(c.req);
+    if (!user) return c.json({ error: 'Unauthorized' }, 401);
+
+    const userData = await kv.get(`user:${user.id}`);
+    if (userData?.role !== 'admin') return c.json({ error: 'Admin only' }, 403);
+
+    const targetUserId = c.req.param('userId');
+    const { serviceNumber } = await c.req.json();
+
+    const targetUser = await kv.get(`user:${targetUserId}`);
+    if (!targetUser) return c.json({ error: 'User not found' }, 404);
+
+    // Update Auth metadata
+    const { error: authError } = await supabaseAdmin.auth.admin.updateUserById(targetUserId, {
+      user_metadata: { ...targetUser, serviceNumber }
+    });
+    if (authError) throw authError;
+
+    // Update KV
+    const updatedUser = { ...targetUser, serviceNumber };
+    await kv.set(`user:${targetUserId}`, updatedUser);
+
+    return c.json({ success: true, user: updatedUser });
+  } catch (error: any) {
+    console.log('Error updating user service number:', error.message);
     return c.json({ error: error.message }, 500);
   }
 });

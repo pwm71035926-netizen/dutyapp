@@ -168,9 +168,9 @@ export default function Login() {
                      if (!open) { setResetStep(1); setResetUsername(''); setSecurityAnswer(''); setNewPassword(''); }
                    }}>
                      <DialogTrigger asChild>
-                       <button type="button" className="text-[10px] font-black uppercase tracking-widest text-gray-400 hover:text-indigo-600 transition-colors">비밀번호 찾기</button>
+                       <Button type="button" variant="ghost" className="text-[10px] font-black uppercase tracking-widest text-gray-400 hover:text-indigo-600 transition-colors h-auto p-0 bg-transparent">비밀번호 찾기</Button>
                      </DialogTrigger>
-                     <DialogContent className="sm:max-w-md w-[95vw] rounded-[32px] p-6 bg-white border border-gray-100 shadow-2xl">
+                     <DialogContent className="sm:max-w-md w-[95vw] rounded-[32px] p-6 border-gray-100 shadow-2xl" style={{ backgroundColor: '#ffffff' }}>
                        <DialogHeader>
                          <DialogTitle className="text-xl font-black text-gray-900 flex items-center gap-2 tracking-tight">
                             <ShieldQuestion className="w-6 h-6 text-indigo-600" />

@@ -91,7 +91,7 @@ const CalendarDay = memo(({
         {day}
       </span>
       {duty && !isSelected && (
-        <div className={`w-1.5 h-1.5 rounded-full mt-1 ${isMyDuty ? 'bg-orange-500 animate-pulse' : duty.type === 'weekend' ? 'bg-red-400' : 'bg-gray-300'}`} />
+        <div className={`w-1.5 h-1.5 rounded-full mt-1 ${isMyDuty ? 'bg-indigo-500 animate-pulse' : duty.type === 'weekend' ? 'bg-red-400' : 'bg-gray-300'}`} />
       )}
       {isSelected && duty && <div className="absolute -bottom-1 w-1 h-1 bg-white rounded-full" />}
     </div>
@@ -529,10 +529,10 @@ export default function Dashboard() {
             )}
             <Dialog open={notificationDialogOpen} onOpenChange={setNotificationDialogOpen}>
               <DialogTrigger asChild>
-                <button className="relative w-9 h-9 bg-gray-50 rounded-full flex items-center justify-center border border-gray-100 active:scale-95 transition-transform">
+                <Button variant="ghost" size="icon" className="relative w-9 h-9 bg-gray-50 rounded-full flex items-center justify-center border border-gray-100 active:scale-95 transition-transform">
                   <Bell className="w-4 h-4 text-gray-600" />
                   {unreadCount > 0 && <span className="absolute top-2 right-2 w-2 h-2 bg-indigo-600 rounded-full ring-2 ring-white" />}
-                </button>
+                </Button>
               </DialogTrigger>
               <DialogContent className="sm:max-w-md w-[95vw] rounded-3xl p-0 overflow-hidden bg-white top-[50%]">
                  <DialogHeader className="p-5 border-b border-gray-100 bg-white flex flex-row items-center justify-between">
@@ -629,11 +629,11 @@ export default function Dashboard() {
               }
             }}>
               <PopoverTrigger asChild>
-                <button className="w-9 h-9 bg-indigo-50 rounded-full flex items-center justify-center border border-indigo-100 shadow-sm active:scale-95 transition-transform cursor-pointer overflow-hidden ring-2 ring-transparent hover:ring-indigo-200">
+                <Button className="w-9 h-9 bg-indigo-50 rounded-full flex items-center justify-center border border-indigo-100 shadow-sm active:scale-95 transition-transform cursor-pointer overflow-hidden ring-2 ring-transparent hover:ring-indigo-200 p-0">
                   <div className="w-full h-full flex items-center justify-center font-bold text-indigo-600 text-xs">
                     {currentUser?.name.charAt(0)}
                   </div>
-                </button>
+                </Button>
               </PopoverTrigger>
               <PopoverContent align="end" sideOffset={8} className="w-[85vw] sm:w-80 rounded-3xl p-0 overflow-hidden bg-white border-none shadow-2xl animate-in zoom-in-95 duration-200 origin-top-right">
                 <div className="bg-gradient-to-br from-indigo-600 to-indigo-700 p-6 text-white relative">
@@ -645,7 +645,7 @@ export default function Dashboard() {
                       <p className="text-[9px] font-black tracking-widest text-white/60 mb-2">{currentUser?.serviceNumber || '군번 미등록'}</p>
                       <div className="flex items-center gap-1.2 px-2.5 py-0.5 bg-white/10 rounded-full text-[9px] font-bold uppercase tracking-wider">
                          <Shield className="w-2.5 h-2.5" />
-                         {currentUser?.role === 'admin' ? '관리자' : '일반 대원'}
+                         {currentUser?.role === 'admin' ? '관리자' : '일반사용자'}
                       </div>
                       <p className="text-[9px] font-bold text-white/40 mt-2 tracking-wider">v1.1.2</p>
                    </div>
@@ -663,22 +663,24 @@ export default function Dashboard() {
                            placeholder="변경할 이름을 입력하세요"
                          />
                       </div>
-                        <div className="space-y-1">
-                           <label className="text-[9px] font-bold text-gray-400 uppercase tracking-widest ml-1">군번</label>
-                           <Input 
-                             value={profileForm.serviceNumber} 
-                             onChange={(e) => {
-                               const val = e.target.value.replace(/[^0-9]/g, '');
-                               let formatted = val;
-                               if (val.length > 2) {
-                                 formatted = val.slice(0, 2) + '-' + val.slice(2, 8);
-                               }
-                               setProfileForm({...profileForm, serviceNumber: formatted});
-                             }}
-                             className="h-10 rounded-xl border-gray-100 bg-gray-50 focus:ring-indigo-500 font-mono text-sm"
-                             placeholder="00-000000"
-                           />
-                        </div>
+                        {currentUser?.role === 'admin' && (
+                         <div className="space-y-1">
+                            <label className="text-[9px] font-bold text-gray-400 uppercase tracking-widest ml-1">군번</label>
+                            <Input 
+                              value={profileForm.serviceNumber} 
+                              onChange={(e) => {
+                                const val = e.target.value.replace(/[^0-9]/g, '');
+                                let formatted = val;
+                                if (val.length > 2) {
+                                  formatted = val.slice(0, 2) + '-' + val.slice(2, 8);
+                                }
+                                setProfileForm({...profileForm, serviceNumber: formatted});
+                              }}
+                              className="h-10 rounded-xl border-gray-100 bg-gray-50 focus:ring-indigo-500 font-mono text-sm"
+                              placeholder="00-000000"
+                            />
+                         </div>
+                        )}
                       <div className="space-y-1">
                          <label className="text-[9px] font-bold text-gray-400 uppercase tracking-widest ml-1">새 비밀번호 (선택)</label>
                          <Input 
@@ -835,7 +837,7 @@ export default function Dashboard() {
                       </div>
                       <div className="mt-4 pt-4 border-t border-gray-50 flex items-center justify-between">
                         <div className="flex items-center gap-2">
-                          {selectedDuty.userId === currentUser?.id && <Badge className="bg-orange-500 text-white rounded-lg px-2 py-0.5 text-[10px]">내 당직</Badge>}
+                          {selectedDuty.userId === currentUser?.id && <Badge className="bg-indigo-500 text-white rounded-lg px-2 py-0.5 text-[10px]">내 당직</Badge>}
                         </div>
                         <div className="flex items-center gap-2">
                           {selectedDuty.userId === currentUser?.id && (

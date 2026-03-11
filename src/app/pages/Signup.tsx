@@ -24,7 +24,6 @@ export default function Signup() {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [name, setName] = useState('');
-  const [serviceNumber, setServiceNumber] = useState('');
   const [role, setRole] = useState('user');
   const [securityQuestion, setSecurityQuestion] = useState(SECURITY_QUESTIONS[0]);
   const [securityAnswer, setSecurityAnswer] = useState('');
@@ -39,7 +38,6 @@ export default function Signup() {
         username,
         password,
         name,
-        serviceNumber,
         role,
         securityQuestion,
         securityAnswer
@@ -109,28 +107,6 @@ export default function Signup() {
               </div>
 
               <div className="space-y-1.5">
-                <Label htmlFor="serviceNumber" className="text-[10px] font-black uppercase tracking-widest text-indigo-600 flex items-center gap-2 ml-1">
-                  군번
-                </Label>
-                <Input
-                  id="serviceNumber"
-                  type="text"
-                  placeholder="00-000000"
-                  className="h-12 rounded-2xl border-gray-100 bg-gray-50 focus:bg-white focus:border-indigo-500/50 transition-all text-sm text-gray-900 font-mono"
-                  value={serviceNumber}
-                  onChange={(e) => {
-                    const val = e.target.value.replace(/[^0-9]/g, '');
-                    let formatted = val;
-                    if (val.length > 2) {
-                      formatted = val.slice(0, 2) + '-' + val.slice(2, 8);
-                    }
-                    setServiceNumber(formatted);
-                  }}
-                  required
-                />
-              </div>
-
-              <div className="space-y-1.5">
                 <Label htmlFor="password" className="text-[10px] font-black uppercase tracking-widest text-indigo-600 flex items-center gap-2 ml-1">
                   <Lock className="w-3 h-3" /> 비밀번호
                 </Label>
@@ -185,8 +161,8 @@ export default function Signup() {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent className="rounded-2xl bg-white border-gray-100 text-gray-900 shadow-2xl">
-                    <SelectItem value="user" className="rounded-lg">일반 대원</SelectItem>
-                    <SelectItem value="admin" className="rounded-lg">반장/관리자</SelectItem>
+                    <SelectItem value="user" className="rounded-lg">일반사용자</SelectItem>
+                    <SelectItem value="admin" className="rounded-lg">관리자</SelectItem>
                   </SelectContent>
                 </Select>
               </div>

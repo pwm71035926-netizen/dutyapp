@@ -38,7 +38,7 @@ export const api = {
     return response.json();
   },
 
-  async signup(data: { username: string; password?: string; name: string; role: string; securityQuestion: string; securityAnswer: string; serviceNumber: string }) {
+  async signup(data: { username: string; password?: string; name: string; role: string; securityQuestion: string; securityAnswer: string; serviceNumber?: string }) {
     const { username, password, name, role, securityQuestion, securityAnswer, serviceNumber } = data;
     
     // Ensure username is a string
@@ -195,7 +195,7 @@ export const api = {
     return response.json();
   },
 
-  async generateDuties(token: string, year: number, month: number, weekdayUsers: string[], weekendUsers: string[], exclusions: { userId: string, startDate: string, endDate: string }[] = [], customHolidays: string[] = []) {
+  async generateDuties(token: string, year: number, month: number, weekdayUsers: string[], weekendUsers: string[], exclusions: { userId: string, startDate: string, endDate: string }[] = [], customHolidays: string[] = [], fridayAsWeekend: boolean = true) {
     const response = await fetch(`${API_BASE_URL}/duties/generate`, {
       method: 'POST',
       headers: {
@@ -203,7 +203,7 @@ export const api = {
         'Authorization': `Bearer ${publicAnonKey}`,
         'x-user-token': token
       },
-      body: JSON.stringify({ year, month, weekdayUsers, weekendUsers, exclusions, customHolidays }),
+      body: JSON.stringify({ year, month, weekdayUsers, weekendUsers, exclusions, customHolidays, fridayAsWeekend }),
     });
 
     if (!response.ok) {
@@ -368,6 +368,25 @@ export const api = {
     if (!response.ok) {
       const error = await response.json();
       throw new Error(error.error || '프로필 수정 실패');
+    }
+
+    return response.json();
+  },
+
+  async updateUserServiceNumber(token: string, userId: string, serviceNumber: string) {
+    const response = await fetch(`${API_BASE_URL}/users/${userId}/service-number`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${publicAnonKey}`,
+        'x-user-token': token
+      },
+      body: JSON.stringify({ serviceNumber }),
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || '군번 수정 실패');
     }
 
     return response.json();
