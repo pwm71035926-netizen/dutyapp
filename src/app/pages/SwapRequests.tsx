@@ -24,7 +24,9 @@ import {
   Info,
   ChevronDown,
   CheckCircle2,
-  History
+  History,
+  ArrowRight,
+  UserCheck
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -39,6 +41,11 @@ interface SwapRequest {
   date: number;
   fromDate?: number;
   toDate?: number;
+  fromYear?: number;
+  fromMonth?: number;
+  toYear?: number;
+  toMonth?: number;
+  mode?: 'mutual' | 'oneway';
   status: 'pending' | 'approved' | 'rejected' | 'cancelled';
   createdAt: string;
 }
@@ -155,6 +162,22 @@ export default function SwapRequests() {
   const [fromDate, setFromDate] = useState<number | null>(paramFromDate ? parseInt(paramFromDate) : null);
   const [toDate, setToDate] = useState<number | null>(null);
 
+  // Swap mode: 'mutual' = 1:1 교환, 'oneway' = 일방교환(대리근무)
+  const [swapMode, setSwapMode] = useState<'mutual' | 'oneway'>('mutual');
+
+  // One-way swap states
+  const [onewayCalYear, setOnewayCalYear] = useState(now.getFullYear());
+  const [onewayCalMonth, setOnewayCalMonth] = useState(now.getMonth() + 1);
+  const [onewayDuties, setOnewayDuties] = useState<Duty[]>([]);
+  const [onewayTargetDate, setOnewayTargetDate] = useState<number | null>(null);
+
+  // Cross-month swap: separate from/to month tracking
+  const [fromYear, setFromYear] = useState<number | null>(paramYear ? parseInt(paramYear) : null);
+  const [fromMonth, setFromMonth] = useState<number | null>(paramMonth ? parseInt(paramMonth) : null);
+  const [toCalYear, setToCalYear] = useState(paramYear ? parseInt(paramYear) : now.getFullYear());
+  const [toCalMonth, setToCalMonth] = useState(paramMonth ? parseInt(paramMonth) : now.getMonth() + 1);
+  const [targetDuties, setTargetDuties] = useState<Duty[]>([]);
+
   // Confirmation dialog
   const [confirmState, setConfirmState] = useState<{
     open: boolean;
@@ -174,6 +197,13 @@ export default function SwapRequests() {
   useEffect(() => {
     if (paramFromDate) {
       setMainTab('create');
+      // If coming from dashboard with params, initialize fromYear/fromMonth
+      const pYear = paramYear ? parseInt(paramYear) : now.getFullYear();
+      const pMonth = paramMonth ? parseInt(paramMonth) : now.getMonth() + 1;
+      setFromYear(pYear);
+      setFromMonth(pMonth);
+      setToCalYear(pYear);
+      setToCalMonth(pMonth);
     }
   }, [paramFromDate]);
 
@@ -187,6 +217,27 @@ export default function SwapRequests() {
     }
   }, [swapYear, swapMonth, token]);
 
+  // Load target month duties independently for Step 2
+  useEffect(() => {
+    if (token && fromDate !== null) {
+      loadTargetDuties(toCalYear, toCalMonth);
+    }
+  }, [toCalYear, toCalMonth, token, fromDate]);
+
+  // Load one-way swap duties when mode is active or month changes
+  useEffect(() => {
+    if (token && swapMode === 'oneway') {
+      loadOnewayDuties(onewayCalYear, onewayCalMonth);
+    }
+  }, [onewayCalYear, onewayCalMonth, token, swapMode]);
+
+  // Initialize one-way duties from current duties when entering oneway mode
+  useEffect(() => {
+    if (swapMode === 'oneway' && duties.length > 0 && onewayCalYear === swapYear && onewayCalMonth === swapMonth) {
+      setOnewayDuties([...duties]);
+    }
+  }, [swapMode]);
+
   // Auto-scroll to Step 3 when toDate is selected
   useEffect(() => {
     if (toDate && fromDate) {
@@ -195,6 +246,15 @@ export default function SwapRequests() {
       }, 150);
     }
   }, [toDate, fromDate]);
+
+  // Auto-scroll for one-way confirm
+  useEffect(() => {
+    if (onewayTargetDate && swapMode === 'oneway') {
+      setTimeout(() => {
+        step3Ref.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }, 150);
+    }
+  }, [onewayTargetDate, swapMode]);
 
   const loadData = async () => {
     try {
@@ -237,12 +297,37 @@ export default function SwapRequests() {
     }
   };
 
+  const loadTargetDuties = async (year: number, month: number) => {
+    if (!token) return;
+    try {
+      const { duties: d } = await api.getDuties(token, year, month);
+      if (!d || d.length === 0) {
+        toast.error(`${year}년 ${month}월 근무표가 아직 생성되지 않았습니다.`);
+        setTargetDuties([]);
+        return;
+      }
+      setTargetDuties(d);
+    } catch {
+      setTargetDuties([]);
+    }
+  };
+
+  const loadOnewayDuties = async (year: number, month: number) => {
+    if (!token) return;
+    try {
+      const { duties: d } = await api.getDuties(token, year, month);
+      setOnewayDuties(d || []);
+    } catch {
+      setOnewayDuties([]);
+    }
+  };
+
   const handleRespond = async (requestId: string, action: 'approve' | 'reject' | 'cancel') => {
     if (!token) return;
     try {
-      // Use v2 endpoint for requests with fromDate/toDate, fallback to v1
+      // Use v2 endpoint for requests with toDate or oneway mode, fallback to v1
       const req = requests.find(r => r.id === requestId);
-      if (req?.fromDate && req?.toDate) {
+      if (req?.toDate || req?.mode === 'oneway') {
         await api.respondToSwapRequestV2(token, requestId, action);
       } else {
         await api.respondToSwapRequest(token, requestId, action);
@@ -256,12 +341,13 @@ export default function SwapRequests() {
   };
 
   const handleCreateSwap = async () => {
-    if (!token || !fromDate || !toDate) return;
+    if (!token || !fromDate || !toDate || !fromYear || !fromMonth) return;
 
     setSending(true);
     try {
-      await api.createSwapRequestV2(token, swapYear, swapMonth, fromDate, toDate);
+      await api.createSwapRequestV2(token, fromYear, fromMonth, fromDate, toCalYear, toCalMonth, toDate);
       toast.success('교환 요청을 보냈습니다!');
+      setFromDate(null);
       setToDate(null);
       loadData();
       // Switch to sent tab to see the request
@@ -274,12 +360,37 @@ export default function SwapRequests() {
     }
   };
 
+  const handleCreateOnewaySwap = async () => {
+    if (!token || !onewayTargetDate) return;
+
+    setSending(true);
+    try {
+      await api.createOnewaySwap(token, onewayCalYear, onewayCalMonth, onewayTargetDate);
+      toast.success('대리근무 요청을 보냈습니다!');
+      setOnewayTargetDate(null);
+      loadData();
+      setMainTab('history');
+      setHistoryTab('sent');
+    } catch (error: any) {
+      toast.error(error.message || '대리근무 요청 실패');
+    } finally {
+      setSending(false);
+    }
+  };
+
   // Memoized values
   const dutyMap = useMemo(() => {
     const map = new Map<number, Duty>();
     duties.forEach((d) => map.set(d.date, d));
     return map;
   }, [duties]);
+
+  // Target month duty map for Step 2 calendar
+  const targetDutyMap = useMemo(() => {
+    const map = new Map<number, Duty>();
+    targetDuties.forEach((d) => map.set(d.date, d));
+    return map;
+  }, [targetDuties]);
 
   const daysInMonthList = useMemo(() => {
     const firstDay = new Date(swapYear, swapMonth - 1, 1);
@@ -292,13 +403,63 @@ export default function SwapRequests() {
     return result;
   }, [swapYear, swapMonth]);
 
+  // Target month days for Step 2 calendar
+  const targetDaysInMonthList = useMemo(() => {
+    const firstDay = new Date(toCalYear, toCalMonth - 1, 1);
+    const lastDay = new Date(toCalYear, toCalMonth, 0);
+    const totalDays = lastDay.getDate();
+    const startingDayOfWeek = firstDay.getDay();
+    const result: (number | null)[] = [];
+    for (let i = 0; i < startingDayOfWeek; i++) result.push(null);
+    for (let i = 1; i <= totalDays; i++) result.push(i);
+    return result;
+  }, [toCalYear, toCalMonth]);
+
   const myDutyDates = useMemo(() => {
     if (!currentUser) return new Set<number>();
     return new Set(duties.filter((d) => d.userId === currentUser.id).map((d) => d.date));
   }, [duties, currentUser]);
 
+  // My duty dates in the target month (Step 2)
+  const targetMyDutyDates = useMemo(() => {
+    if (!currentUser) return new Set<number>();
+    return new Set(targetDuties.filter((d) => d.userId === currentUser.id).map((d) => d.date));
+  }, [targetDuties, currentUser]);
+
   const fromDuty = fromDate ? dutyMap.get(fromDate) : null;
-  const toDuty = toDate ? dutyMap.get(toDate) : null;
+  const toDuty = toDate ? targetDutyMap.get(toDate) : null;
+
+  // Whether Step 2 is showing a different month than Step 1
+  const isCrossMonth = fromYear !== null && fromMonth !== null && (toCalYear !== fromYear || toCalMonth !== fromMonth);
+
+  // One-way swap memos
+  const onewayDutyMap = useMemo(() => {
+    const map = new Map<number, Duty>();
+    onewayDuties.forEach((d) => map.set(d.date, d));
+    return map;
+  }, [onewayDuties]);
+
+  const onewayDaysInMonthList = useMemo(() => {
+    const firstDay = new Date(onewayCalYear, onewayCalMonth - 1, 1);
+    const lastDay = new Date(onewayCalYear, onewayCalMonth, 0);
+    const totalDays = lastDay.getDate();
+    const startingDayOfWeek = firstDay.getDay();
+    const result: (number | null)[] = [];
+    for (let i = 0; i < startingDayOfWeek; i++) result.push(null);
+    for (let i = 1; i <= totalDays; i++) result.push(i);
+    return result;
+  }, [onewayCalYear, onewayCalMonth]);
+
+  const onewayMyDutyDates = useMemo(() => {
+    if (!currentUser) return new Set<number>();
+    return new Set(onewayDuties.filter((d) => d.userId === currentUser.id).map((d) => d.date));
+  }, [onewayDuties, currentUser]);
+
+  const onewayTargetDuty = onewayTargetDate ? onewayDutyMap.get(onewayTargetDate) : null;
+
+  const handleOnewayDateSelect = useCallback((day: number) => {
+    setOnewayTargetDate(day);
+  }, []);
 
   // Memoized callback for SwapCalendarDay onClick
   const handleToDateSelect = useCallback((day: number) => {
@@ -430,6 +591,230 @@ export default function SwapRequests() {
               exit={{ opacity: 0, y: -10 }}
               className="space-y-4"
             >
+              {/* Swap Mode Toggle */}
+              <div className="flex p-1 bg-white rounded-2xl border border-gray-100 shadow-sm">
+                <button
+                  onClick={() => {
+                    setSwapMode('mutual');
+                    setOnewayTargetDate(null);
+                  }}
+                  className={`flex-1 py-2.5 rounded-xl text-[11px] font-black uppercase tracking-tight transition-all flex items-center justify-center gap-1.5 ${
+                    swapMode === 'mutual'
+                      ? 'bg-indigo-600 text-white shadow-md'
+                      : 'text-gray-400 hover:text-gray-600'
+                  }`}
+                >
+                  <ArrowLeftRight className="w-3.5 h-3.5" />
+                  1:1 교환
+                </button>
+                <button
+                  onClick={() => {
+                    setSwapMode('oneway');
+                    setFromDate(null);
+                    setToDate(null);
+                    setOnewayTargetDate(null);
+                    setOnewayCalYear(swapYear);
+                    setOnewayCalMonth(swapMonth);
+                  }}
+                  className={`flex-1 py-2.5 rounded-xl text-[11px] font-black uppercase tracking-tight transition-all flex items-center justify-center gap-1.5 ${
+                    swapMode === 'oneway'
+                      ? 'bg-purple-600 text-white shadow-md'
+                      : 'text-gray-400 hover:text-gray-600'
+                  }`}
+                >
+                  <UserCheck className="w-3.5 h-3.5" />
+                  일방교환
+                </button>
+              </div>
+
+              {/* === ONE-WAY MODE === */}
+              {swapMode === 'oneway' && (
+                <>
+                  {/* Step 1: Pick target duty to take over */}
+                  <Card className="border-none shadow-lg rounded-3xl bg-white overflow-hidden ring-1 ring-purple-100">
+                    <CardHeader className="p-4 pb-2">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <div className="w-6 h-6 bg-purple-600 rounded-lg flex items-center justify-center text-white text-[10px] font-black">1</div>
+                          <CardTitle className="text-sm font-bold">대신 설 당직 선택</CardTitle>
+                        </div>
+                        <div className="flex items-center gap-0.5 bg-gray-50 rounded-xl px-1 py-0.5 border border-gray-100">
+                          <button
+                            onClick={() => {
+                              const prev = onewayCalMonth === 1 ? 12 : onewayCalMonth - 1;
+                              const prevYear = onewayCalMonth === 1 ? onewayCalYear - 1 : onewayCalYear;
+                              setOnewayCalMonth(prev);
+                              setOnewayCalYear(prevYear);
+                              setOnewayTargetDate(null);
+                            }}
+                            className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-white active:scale-90 transition-all"
+                          >
+                            <ChevronLeft className="w-4 h-4 text-gray-500" />
+                          </button>
+                          <span className="text-xs font-black text-purple-600 min-w-[56px] text-center tabular-nums">
+                            {onewayCalYear}.{String(onewayCalMonth).padStart(2, '0')}
+                          </span>
+                          <button
+                            onClick={() => {
+                              const next = onewayCalMonth === 12 ? 1 : onewayCalMonth + 1;
+                              const nextYear = onewayCalMonth === 12 ? onewayCalYear + 1 : onewayCalYear;
+                              setOnewayCalMonth(next);
+                              setOnewayCalYear(nextYear);
+                              setOnewayTargetDate(null);
+                            }}
+                            className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-white active:scale-90 transition-all"
+                          >
+                            <ChevronRight className="w-4 h-4 text-gray-500" />
+                          </button>
+                        </div>
+                      </div>
+                    </CardHeader>
+                    <CardContent className="p-4 pt-2">
+                      {onewayDuties.length === 0 ? (
+                        <div className="py-6 text-center">
+                          <CalendarIcon className="w-8 h-8 mx-auto mb-2 text-gray-200" />
+                          <p className="text-xs text-gray-400 font-bold">이 달의 근무표가 아직 생성되지 않았습니다.</p>
+                        </div>
+                      ) : (
+                        <>
+                          <p className="text-xs text-gray-400 font-medium mb-3">상대방의 당직일을 선택하면 내가 대신 서게 됩니다.</p>
+                          <div className="grid grid-cols-7 mb-2">
+                            {['일', '월', '화', '수', '목', '금', '토'].map((day, i) => (
+                              <span
+                                key={i}
+                                className={`text-[9px] font-black text-center uppercase tracking-widest ${
+                                  i === 0 ? 'text-red-400' : i === 6 ? 'text-blue-400' : 'text-gray-400'
+                                }`}
+                              >
+                                {day}
+                              </span>
+                            ))}
+                          </div>
+                          <div className="grid grid-cols-7 gap-1">
+                            {onewayDaysInMonthList.map((day, index) => (
+                              <SwapCalendarDay
+                                key={index}
+                                index={index}
+                                day={day}
+                                duty={day ? onewayDutyMap.get(day) || null : null}
+                                isMyDuty={day ? onewayMyDutyDates.has(day) : false}
+                                isSelected={onewayTargetDate === day}
+                                isFromDate={false}
+                                isToday={
+                                  day === now.getDate() &&
+                                  onewayCalMonth === now.getMonth() + 1 &&
+                                  onewayCalYear === now.getFullYear()
+                                }
+                                isHoliday={day ? (onewayDuties.find(du => du.date === day)?.isHoliday || false) : false}
+                                onClick={handleOnewayDateSelect}
+                              />
+                            ))}
+                          </div>
+                          <div className="flex items-center gap-4 mt-3 pt-3 border-t border-gray-50">
+                            <div className="flex items-center gap-1.5">
+                              <div className="w-3 h-3 bg-indigo-500 rounded" />
+                              <span className="text-[9px] font-bold text-gray-400">내 당직</span>
+                            </div>
+                            <div className="flex items-center gap-1.5">
+                              <div className="w-3 h-3 bg-indigo-600 rounded" />
+                              <span className="text-[9px] font-bold text-gray-400">대리 대상</span>
+                            </div>
+                          </div>
+                        </>
+                      )}
+                    </CardContent>
+                  </Card>
+
+                  {/* Step 2: Confirm one-way */}
+                  {onewayTargetDate && onewayTargetDuty && (
+                    <motion.div ref={step3Ref} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}>
+                      <Card className="border-none shadow-xl rounded-3xl bg-white overflow-hidden ring-1 ring-purple-100">
+                        <CardHeader className="p-4 pb-2">
+                          <div className="flex items-center gap-2">
+                            <div className="w-6 h-6 bg-green-600 rounded-lg flex items-center justify-center text-white text-[10px] font-black">2</div>
+                            <CardTitle className="text-sm font-bold">대리근무 확인</CardTitle>
+                          </div>
+                        </CardHeader>
+                        <CardContent className="p-4 pt-2 space-y-4">
+                          <div className="flex items-center gap-3">
+                            <div className="flex-1 p-3 bg-purple-50 rounded-2xl border border-purple-100 text-center">
+                              <p className="text-[9px] font-black text-purple-500 uppercase tracking-wider mb-1">대신 설 당직</p>
+                              <p className="text-lg font-black text-gray-900">{onewayCalMonth}/{onewayTargetDate}일</p>
+                              <p className="text-[9px] font-bold text-purple-400 mt-0.5">{onewayCalYear}년 {onewayCalMonth}월</p>
+                              <div className="w-8 h-8 bg-purple-100 rounded-full flex items-center justify-center mx-auto mt-2 text-purple-600 text-xs font-black">
+                                {onewayTargetDuty.userName.charAt(0)}
+                              </div>
+                              <p className="text-[10px] font-bold text-gray-500 mt-1">{onewayTargetDuty.userName}</p>
+                            </div>
+
+                            <div className="flex flex-col items-center gap-1">
+                              <ArrowRight className="w-5 h-5 text-purple-500" />
+                              <span className="text-[8px] font-black text-purple-400 uppercase">대리</span>
+                            </div>
+
+                            <div className="flex-1 p-3 bg-green-50 rounded-2xl border border-green-100 text-center">
+                              <p className="text-[9px] font-black text-green-600 uppercase tracking-wider mb-1">대리근무자</p>
+                              <p className="text-lg font-black text-gray-900">{currentUser?.name}</p>
+                              <p className="text-[9px] font-bold text-green-400 mt-0.5">내가 대신 섭니다</p>
+                              <div className="w-8 h-8 bg-green-100 rounded-full flex items-center justify-center mx-auto mt-2 text-green-600 text-xs font-black">
+                                {currentUser?.name.charAt(0)}
+                              </div>
+                              <p className="text-[10px] font-bold text-gray-500 mt-1">{currentUser?.name}</p>
+                            </div>
+                          </div>
+
+                          <div className="flex items-start gap-2 p-3 bg-purple-50 rounded-xl border border-purple-100">
+                            <UserCheck className="w-3.5 h-3.5 text-purple-500 shrink-0 mt-0.5" />
+                            <p className="text-[11px] text-purple-700 leading-relaxed font-medium">
+                              승인 시 <strong>{onewayTargetDuty.userName}</strong>님의 {onewayCalMonth}/{onewayTargetDate}일 당직을 <strong>{currentUser?.name}</strong>님이 대신 서게 됩니다. 내 기존 당직 일정에는 변동이 없습니다.
+                            </p>
+                          </div>
+
+                          <div className="flex items-start gap-2 p-3 bg-amber-50 rounded-xl border border-amber-100">
+                            <Info className="w-3.5 h-3.5 text-amber-500 shrink-0 mt-0.5" />
+                            <p className="text-[11px] text-amber-700 leading-relaxed font-medium">
+                              <strong>{onewayTargetDuty.userName}</strong>님의 승인이 필요합니다.
+                            </p>
+                          </div>
+
+                          <Button
+                            onClick={handleCreateOnewaySwap}
+                            disabled={sending}
+                            className="w-full h-12 rounded-2xl bg-purple-600 hover:bg-purple-700 font-bold text-white shadow-lg shadow-purple-100 active:scale-[0.98] transition-all"
+                          >
+                            {sending ? (
+                              <div className="flex items-center gap-2">
+                                <Loader2 className="w-4 h-4 animate-spin" />
+                                전송 중...
+                              </div>
+                            ) : (
+                              <div className="flex items-center gap-2">
+                                <Send className="w-4 h-4" />
+                                대리근무 요청 보내기
+                              </div>
+                            )}
+                          </Button>
+                        </CardContent>
+                      </Card>
+                    </motion.div>
+                  )}
+
+                  {/* Guidance for one-way mode */}
+                  {!onewayTargetDate && onewayDuties.length > 0 && (
+                    <div className="flex items-start gap-2 p-4 bg-purple-50 rounded-2xl border border-purple-100">
+                      <Info className="w-4 h-4 text-purple-500 shrink-0 mt-0.5" />
+                      <p className="text-xs text-purple-700 leading-relaxed font-medium">
+                        캘린더에서 <strong>대신 서고 싶은 당직일</strong>을 선택하세요.
+                        승인되면 해당 날짜의 당직이 나에게 넘어오며, 내 기존 당직 일정은 변하지 않습니다.
+                      </p>
+                    </div>
+                  )}
+                </>
+              )}
+
+              {/* === MUTUAL MODE === */}
+              {swapMode === 'mutual' && (
+                <>
               {/* Step 1: My Duty (From Date) */}
               <Card className="border-none shadow-lg rounded-3xl bg-white overflow-hidden">
                 <CardHeader className="p-4 pb-2">
@@ -484,7 +869,7 @@ export default function SwapRequests() {
                         <div>
                           <p className="text-[10px] text-orange-600 font-bold uppercase tracking-wider">내 당직일</p>
                           <p className="text-sm font-bold text-gray-900">
-                            {swapYear}년 {swapMonth}월 {fromDate}일 ({fromDuty.type === 'weekend' ? '주말' : '평일'})
+                            {fromYear}년 {fromMonth}월 {fromDate}일 ({fromDuty.type === 'weekend' ? '주말' : '평일'})
                           </p>
                         </div>
                       </div>
@@ -494,7 +879,12 @@ export default function SwapRequests() {
                         className="rounded-full text-orange-400 hover:text-orange-600 hover:bg-orange-100"
                         onClick={() => {
                           setFromDate(null);
+                          setFromYear(null);
+                          setFromMonth(null);
                           setToDate(null);
+                          setTargetDuties([]);
+                          setSwapMode('mutual');
+                          setOnewayTargetDate(null);
                         }}
                       >
                         <X className="w-4 h-4" />
@@ -514,6 +904,13 @@ export default function SwapRequests() {
                               onClick={() => {
                                 setFromDate(d.date);
                                 setToDate(null);
+                                setFromYear(swapYear);
+                                setFromMonth(swapMonth);
+                                setToCalYear(swapYear);
+                                setToCalMonth(swapMonth);
+                                setTargetDuties([...duties]);
+                                setSwapMode('mutual');
+                                setOnewayTargetDate(null);
                               }}
                               className="px-3 py-2 bg-orange-50 border border-orange-200 rounded-xl text-xs font-bold text-orange-700 hover:bg-orange-100 active:scale-95 transition-all"
                             >
@@ -529,8 +926,8 @@ export default function SwapRequests() {
                 </CardContent>
               </Card>
 
-              {/* Step 2: Target Date Calendar */}
-              {fromDate && (
+              {/* Step 2: Target Date Calendar (Mutual mode) */}
+              {fromDate && swapMode === 'mutual' && (
                 <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}>
                   <Card className="border-none shadow-lg rounded-3xl bg-white overflow-hidden">
                     <CardHeader className="p-4 pb-2">
@@ -543,10 +940,10 @@ export default function SwapRequests() {
                         <div className="flex items-center gap-1">
                           <button
                             onClick={() => {
-                              const prev = swapMonth === 1 ? 12 : swapMonth - 1;
-                              const prevYear = swapMonth === 1 ? swapYear - 1 : swapYear;
-                              setSwapMonth(prev);
-                              setSwapYear(prevYear);
+                              const prev = toCalMonth === 1 ? 12 : toCalMonth - 1;
+                              const prevYear = toCalMonth === 1 ? toCalYear - 1 : toCalYear;
+                              setToCalMonth(prev);
+                              setToCalYear(prevYear);
                               setToDate(null);
                             }}
                             className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-gray-100"
@@ -554,14 +951,14 @@ export default function SwapRequests() {
                             <ChevronLeft className="w-4 h-4 text-gray-400" />
                           </button>
                           <span className="text-xs font-black text-indigo-600 min-w-[60px] text-center">
-                            {swapYear}/{swapMonth}월
+                            {toCalYear}/{toCalMonth}월
                           </span>
                           <button
                             onClick={() => {
-                              const next = swapMonth === 12 ? 1 : swapMonth + 1;
-                              const nextYear = swapMonth === 12 ? swapYear + 1 : swapYear;
-                              setSwapMonth(next);
-                              setSwapYear(nextYear);
+                              const next = toCalMonth === 12 ? 1 : toCalMonth + 1;
+                              const nextYear = toCalMonth === 12 ? toCalYear + 1 : toCalYear;
+                              setToCalMonth(next);
+                              setToCalYear(nextYear);
                               setToDate(null);
                             }}
                             className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-gray-100"
@@ -587,21 +984,21 @@ export default function SwapRequests() {
                       </div>
                       {/* Calendar grid */}
                       <div className="grid grid-cols-7 gap-1">
-                        {daysInMonthList.map((day, index) => (
+                        {targetDaysInMonthList.map((day, index) => (
                           <SwapCalendarDay
                             key={index}
                             index={index}
                             day={day}
-                            duty={day ? dutyMap.get(day) || null : null}
-                            isMyDuty={day ? myDutyDates.has(day) : false}
+                            duty={day ? targetDutyMap.get(day) || null : null}
+                            isMyDuty={day ? targetMyDutyDates.has(day) : false}
                             isSelected={toDate === day}
-                            isFromDate={fromDate === day}
+                            isFromDate={!isCrossMonth && fromDate === day}
                             isToday={
                               day === now.getDate() &&
-                              swapMonth === now.getMonth() + 1 &&
-                              swapYear === now.getFullYear()
+                              toCalMonth === now.getMonth() + 1 &&
+                              toCalYear === now.getFullYear()
                             }
-                            isHoliday={day ? swapHolidaySet.has(day) : false}
+                            isHoliday={day ? (targetDuties.find(du => du.date === day)?.isHoliday || false) : false}
                             onClick={handleToDateSelect}
                           />
                         ))}
@@ -627,8 +1024,8 @@ export default function SwapRequests() {
                 </motion.div>
               )}
 
-              {/* Step 3: Swap Preview & Confirm */}
-              {fromDate && toDate && toDuty && fromDuty && (
+              {/* Step 3: Swap Preview & Confirm (Mutual mode) */}
+              {fromDate && swapMode === 'mutual' && toDate && toDuty && fromDuty && (
                 <motion.div ref={step3Ref} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}>
                   <Card className="border-none shadow-xl rounded-3xl bg-white overflow-hidden border border-indigo-100">
                     <CardHeader className="p-4 pb-2">
@@ -643,7 +1040,10 @@ export default function SwapRequests() {
                         {/* From */}
                         <div className="flex-1 p-3 bg-orange-50 rounded-2xl border border-orange-100 text-center">
                           <p className="text-[9px] font-black text-orange-500 uppercase tracking-wider mb-1">내 당직</p>
-                          <p className="text-lg font-black text-gray-900">{swapMonth}/{fromDate}일</p>
+                          <p className="text-lg font-black text-gray-900">{fromMonth || swapMonth}/{fromDate}일</p>
+                          {isCrossMonth && (
+                            <p className="text-[9px] font-bold text-orange-400 mt-0.5">{fromYear}년 {fromMonth}월</p>
+                          )}
                           <div className="w-8 h-8 bg-orange-100 rounded-full flex items-center justify-center mx-auto mt-2 text-orange-600 text-xs font-black">
                             {currentUser?.name.charAt(0)}
                           </div>
@@ -659,13 +1059,26 @@ export default function SwapRequests() {
                         {/* To */}
                         <div className="flex-1 p-3 bg-indigo-50 rounded-2xl border border-indigo-100 text-center">
                           <p className="text-[9px] font-black text-indigo-500 uppercase tracking-wider mb-1">상대 당직</p>
-                          <p className="text-lg font-black text-gray-900">{swapMonth}/{toDate}일</p>
+                          <p className="text-lg font-black text-gray-900">{toCalMonth}/{toDate}일</p>
+                          {isCrossMonth && (
+                            <p className="text-[9px] font-bold text-indigo-400 mt-0.5">{toCalYear}년 {toCalMonth}월</p>
+                          )}
                           <div className="w-8 h-8 bg-indigo-100 rounded-full flex items-center justify-center mx-auto mt-2 text-indigo-600 text-xs font-black">
                             {toDuty.userName.charAt(0)}
                           </div>
                           <p className="text-[10px] font-bold text-gray-500 mt-1">{toDuty.userName}</p>
                         </div>
                       </div>
+
+                      {/* Cross-month notice */}
+                      {isCrossMonth && (
+                        <div className="flex items-start gap-2 p-3 bg-indigo-50 rounded-xl border border-indigo-100">
+                          <CalendarIcon className="w-3.5 h-3.5 text-indigo-500 shrink-0 mt-0.5" />
+                          <p className="text-[11px] text-indigo-700 leading-relaxed font-medium">
+                            <strong>다른 달 교환:</strong> {fromYear}년 {fromMonth}월과 {toCalYear}년 {toCalMonth}월 간의 교환 요청입니다.
+                          </p>
+                        </div>
+                      )}
 
                       {/* Info notice */}
                       <div className="flex items-start gap-2 p-3 bg-amber-50 rounded-xl border border-amber-100">
@@ -707,6 +1120,8 @@ export default function SwapRequests() {
                     그런 다음 교환할 <strong>상대방의 당직일</strong>을 캘린더에서 선택하면 자동으로 교환 요청이 준비됩니다.
                   </p>
                 </div>
+              )}
+                </>
               )}
             </motion.div>
           ) : (

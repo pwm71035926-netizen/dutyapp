@@ -39,7 +39,6 @@ import {
   PlusCircle,
   ArrowLeftRight,
   ShieldCheck,
-  Loader2,
   Wallet
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
@@ -64,36 +63,41 @@ const CalendarDay = memo(({
   onClick: (day: number) => void,
   index: number
 }) => {
-  if (!day) return <div className="aspect-square invisible" />;
+  if (!day) return <div className="min-h-[60px] invisible" />;
   
   const isMyDuty = duty?.isMyDuty;
 
   return (
     <div
-      className={`aspect-square flex flex-col items-center justify-center rounded-xl transition-all relative cursor-pointer active:scale-90 select-none ${
+      className={`min-h-[60px] flex flex-col items-center justify-start pt-1.5 rounded-xl transition-all relative cursor-pointer active:scale-90 select-none ${
         isSelected 
           ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-200' 
-          : isToday 
-            ? 'bg-indigo-50 text-indigo-700 ring-1 ring-inset ring-indigo-200' 
-            : 'hover:bg-gray-50'
+          : isMyDuty
+            ? 'bg-gray-100 ring-1 ring-inset ring-gray-300'
+            : isToday 
+              ? 'bg-indigo-100 text-indigo-800 ring-2 ring-inset ring-indigo-300' 
+              : 'hover:bg-gray-50'
       }`}
       onClick={() => onClick(day)}
     >
       <span className={`text-sm font-bold ${
         isSelected 
           ? 'text-white' 
-          : (index % 7 === 0 || isHoliday) 
+          : (index % 7 === 0 || index % 7 === 6 || isHoliday) 
             ? 'text-red-500' 
-            : index % 7 === 6 
-              ? 'text-blue-500' 
-              : 'text-gray-700'
+            : 'text-gray-900'
       }`}>
         {day}
       </span>
-      {duty && !isSelected && (
-        <div className={`w-1.5 h-1.5 rounded-full mt-1 ${isMyDuty ? 'bg-indigo-500 animate-pulse' : duty.type === 'weekend' ? 'bg-red-400' : 'bg-gray-300'}`} />
+      {duty && (
+        <span className={`text-[8px] leading-tight font-bold mt-0.5 text-center truncate w-full px-0.5 ${
+          isSelected
+            ? 'text-white/80'
+            : 'text-gray-900'
+        }`}>
+          {duty.userName?.length > 3 ? duty.userName.slice(0, 3) : duty.userName}
+        </span>
       )}
-      {isSelected && duty && <div className="absolute -bottom-1 w-1 h-1 bg-white rounded-full" />}
     </div>
   );
 });
@@ -113,6 +117,7 @@ interface Duty {
   userName: string;
   type: 'weekday' | 'weekend';
   isHoliday?: boolean;
+  holidayType?: 'legal' | 'combat';
 }
 
 interface Notification {
@@ -202,18 +207,36 @@ export default function Dashboard() {
     if (!currentUser) return { weekday: 0, weekend: 0, total: 0 };
     let weekday = 0;
     let weekend = 0;
+    let totalPay = 0;
+    const year = currentDate.getFullYear();
+    const month = currentDate.getMonth(); // 0-indexed
     duties.forEach(d => {
       if (d.userId === currentUser.id) {
-        if (d.type === 'weekend') weekend++;
-        else weekday++;
+        const dayOfWeek = new Date(year, month, d.date).getDay();
+        const isSatSun = dayOfWeek === 0 || dayOfWeek === 6;
+        const isLegalHoliday = d.holidayType === 'legal';
+
+        // 당직비 계산:
+        // - 토/일: 주말 단가 (10만원)
+        // - 법정공휴일 (금요일 포함): 주말 단가 (10만원)
+        // - 금요일 (법정공휴일 아닌 경우): 평일 단가 (3만원)
+        // - 전투휴무: 평일 단가 (3만원)
+        // - 일반 평일: 평일 단가 (3만원)
+        if (isSatSun || isLegalHoliday) {
+          weekend++;
+          totalPay += dutyPrices.weekend;
+        } else {
+          weekday++;
+          totalPay += dutyPrices.weekday;
+        }
       }
     });
     return {
       weekday,
       weekend,
-      total: (weekday * dutyPrices.weekday) + (weekend * dutyPrices.weekend)
+      total: totalPay
     };
-  }, [duties, currentUser, dutyPrices]);
+  }, [duties, currentUser, dutyPrices, currentDate]);
 
   useEffect(() => {
     loadUserData();
@@ -693,7 +716,7 @@ export default function Dashboard() {
                       </div>
                       <div className="flex gap-2 pt-1">
                         <Button onClick={handleProfileUpdate} disabled={isUpdatingProfile} size="sm" className="flex-1 h-10 rounded-xl bg-indigo-600 font-bold text-white text-xs">
-                          <Save className="w-3.5 h-3.5 mr-1.5" /> {isUpdatingProfile ? '저장' : '저장'}
+                          <Save className="w-3.5 h-3.5 mr-1.5" /> {isUpdatingProfile ? '저장 중...' : '저장'}
                         </Button>
                         <Button variant="ghost" size="sm" onClick={() => setEditProfileMode(false)} className="h-10 rounded-xl text-gray-400 px-4 text-xs">취소</Button>
                       </div>
@@ -762,7 +785,7 @@ export default function Dashboard() {
             <CardContent className="p-4 min-h-[340px] flex flex-col">
               <div className="grid grid-cols-7 mb-4">
                 {['일', '월', '화', '수', '목', '금', '토'].map((day, i) => (
-                  <span key={i} className={`text-[10px] font-black text-center uppercase tracking-widest ${i === 0 ? 'text-red-400' : i === 6 ? 'text-blue-400' : 'text-gray-400'}`}>{day}</span>
+                  <span key={i} className={`text-[10px] font-black text-center uppercase tracking-widest ${i === 0 || i === 6 ? 'text-red-400' : 'text-gray-400'}`}>{day}</span>
                 ))}
               </div>
               <div className="relative flex-1">
@@ -881,7 +904,7 @@ export default function Dashboard() {
               </div>
               <div className="space-y-1">
                 <p className="text-xs text-white/70 font-medium">
-                  {currentDate.getMonth() + 1}월 정산 (평일 { (dutyPrices.weekday / 10000).toFixed(1) }, 주말 { (dutyPrices.weekend / 10000).toFixed(1) })
+                  {currentDate.getMonth() + 1}월 정산 (평일/휴무 {(dutyPrices.weekday / 10000).toFixed(0)}만, 주말/공휴일 {(dutyPrices.weekend / 10000).toFixed(0)}만)
                 </p>
                 <div className="flex items-baseline gap-2">
                   <span className="text-2xl font-black">{myMonthlyStats.total.toLocaleString()}원</span>
@@ -891,11 +914,11 @@ export default function Dashboard() {
               <div className="mt-4 pt-4 border-t border-white/10 flex items-center justify-between">
                 <div className="flex gap-4">
                   <div className="flex flex-col">
-                    <span className="text-[10px] font-bold text-white/60 uppercase">평일 근무</span>
+                    <span className="text-[10px] font-bold text-white/60 uppercase">평일/휴무</span>
                     <span className="text-sm font-black">{myMonthlyStats.weekday}회</span>
                   </div>
                   <div className="flex flex-col">
-                    <span className="text-[10px] font-bold text-white/60 uppercase">주말 근무</span>
+                    <span className="text-[10px] font-bold text-white/60 uppercase">주말/공휴일</span>
                     <span className="text-sm font-black">{myMonthlyStats.weekend}회</span>
                   </div>
                 </div>
@@ -904,7 +927,7 @@ export default function Dashboard() {
                 </div>
               </div>
               <p className="mt-4 text-[10px] font-bold text-white/50 bg-black/10 p-2 rounded-xl text-center">
-                {currentDate.getMonth() + 1}월에는 평일 {myMonthlyStats.weekday}회, 주말 {myMonthlyStats.weekend}회 총 {myMonthlyStats.total.toLocaleString()}원 지급예정
+                {currentDate.getMonth() + 1}월에는 평일/휴무 {myMonthlyStats.weekday}회, 주말/공휴일 {myMonthlyStats.weekend}회 총 {myMonthlyStats.total.toLocaleString()}원 지급예정
               </p>
             </CardContent>
           </Card>

@@ -87,6 +87,8 @@ export default function GenerateSchedule() {
 
   // States for custom holidays
   const [customHolidays, setCustomHolidays] = useState<string[]>([]);
+  const [combatRestDays, setCombatRestDays] = useState<string[]>([]);
+  const [holidayTab, setHolidayTab] = useState<'legal' | 'combat'>('legal');
   const [newHoliday, setNewHoliday] = useState({
     year: new Date().getFullYear(),
     month: new Date().getMonth() + 1,
@@ -367,7 +369,7 @@ export default function GenerateSchedule() {
     try {
       const finalWeekday = getWeekdayFinalSequence();
       const finalWeekend = getWeekendFinalSequence();
-      await api.generateDuties(token, year, month, finalWeekday, finalWeekend, exclusions, customHolidays, fridayAsWeekend);
+      await api.generateDuties(token, year, month, finalWeekday, finalWeekend, exclusions, customHolidays, fridayAsWeekend, combatRestDays);
       toast.success('당직 일정이 성공적으로 생성되었습니다!');
       startNavigation('/dashboard', navigate);
     } catch (error: any) {
@@ -413,16 +415,33 @@ export default function GenerateSchedule() {
 
   const addCustomHoliday = () => {
     const dateStr = `${newHoliday.year}-${String(newHoliday.month).padStart(2, '0')}-${String(newHoliday.day).padStart(2, '0')}`;
-    if (customHolidays.includes(dateStr)) {
-      toast.error('이미 등록된 공휴일입니다.');
-      return;
+    if (holidayTab === 'legal') {
+      if (customHolidays.includes(dateStr)) {
+        toast.error('이미 등록된 법정공휴일입니다.');
+        return;
+      }
+      // Remove from combat rest if exists
+      setCombatRestDays(combatRestDays.filter(d => d !== dateStr));
+      setCustomHolidays([...customHolidays, dateStr].sort());
+      toast.success('법정공휴일이 추가되었습니다.');
+    } else {
+      if (combatRestDays.includes(dateStr)) {
+        toast.error('이미 등록된 전투휴무일입니다.');
+        return;
+      }
+      // Remove from legal holidays if exists
+      setCustomHolidays(customHolidays.filter(d => d !== dateStr));
+      setCombatRestDays([...combatRestDays, dateStr].sort());
+      toast.success('전투휴무일이 추가되었습니다.');
     }
-    setCustomHolidays([...customHolidays, dateStr].sort());
-    toast.success('전투휴무(공휴일)가 추가되었습니다.');
   };
 
   const removeCustomHoliday = (date: string) => {
     setCustomHolidays(customHolidays.filter(d => d !== date));
+  };
+
+  const removeCombatRestDay = (date: string) => {
+    setCombatRestDays(combatRestDays.filter(d => d !== date));
   };
 
   // Duty edit functions
@@ -799,14 +818,59 @@ export default function GenerateSchedule() {
                 <CardHeader className="p-5 pb-2">
                   <CardTitle className="text-base font-bold flex items-center gap-2">
                     <div className="w-1 h-4 bg-red-500 rounded-full" />
-                    전투휴무 및 임시공휴일 지정
+                    공휴일 / 전투휴무 지정
                   </CardTitle>
-                  <CardDescription className="text-xs">국가 공휴일 외에 부대 자체 휴무일을 추가합니다.</CardDescription>
+                  <CardDescription className="text-xs">법정공휴일(10만원)과 전투휴무(3만원)를 구분하여 지정합니다.</CardDescription>
                 </CardHeader>
                 <CardContent className="p-5 pt-2 space-y-4">
+                  {/* Holiday Type Tabs */}
+                  <div className="flex p-1 bg-gray-100 rounded-xl">
+                    <button
+                      onClick={() => setHolidayTab('legal')}
+                      className={`flex-1 py-2.5 rounded-lg text-[11px] font-black uppercase tracking-tight transition-all ${
+                        holidayTab === 'legal'
+                          ? 'bg-red-500 text-white shadow-md'
+                          : 'text-gray-400 hover:text-gray-600'
+                      }`}
+                    >
+                      법정공휴일
+                      {customHolidays.length > 0 && (
+                        <span className="ml-1.5 px-1.5 py-0.5 bg-white/20 rounded-full text-[9px]">{customHolidays.length}</span>
+                      )}
+                    </button>
+                    <button
+                      onClick={() => setHolidayTab('combat')}
+                      className={`flex-1 py-2.5 rounded-lg text-[11px] font-black uppercase tracking-tight transition-all ${
+                        holidayTab === 'combat'
+                          ? 'bg-orange-500 text-white shadow-md'
+                          : 'text-gray-400 hover:text-gray-600'
+                      }`}
+                    >
+                      전투휴무
+                      {combatRestDays.length > 0 && (
+                        <span className="ml-1.5 px-1.5 py-0.5 bg-white/20 rounded-full text-[9px]">{combatRestDays.length}</span>
+                      )}
+                    </button>
+                  </div>
+
+                  {/* Info banner */}
+                  <div className={`flex items-start gap-2 p-3 rounded-xl border ${
+                    holidayTab === 'legal' 
+                      ? 'bg-red-50 border-red-100' 
+                      : 'bg-orange-50 border-orange-100'
+                  }`}>
+                    <Info className={`w-3.5 h-3.5 shrink-0 mt-0.5 ${holidayTab === 'legal' ? 'text-red-500' : 'text-orange-500'}`} />
+                    <p className={`text-[11px] leading-relaxed font-medium ${holidayTab === 'legal' ? 'text-red-700' : 'text-orange-700'}`}>
+                      {holidayTab === 'legal' 
+                        ? '법정공휴일은 주말 당직비(10만원)가 적용됩니다. 달력상 공휴일 외 추가 법정공휴일을 지정하세요.'
+                        : '전투휴무는 평일 당직비(3만원)가 적용됩니다. 주말 순번으로 배정되지만 당직비는 평일 기준입니다.'
+                      }
+                    </p>
+                  </div>
+
                   <div className="space-y-3 p-4 bg-gray-50 rounded-xl">
                     <DateSelector 
-                      label="휴무 날짜 선택"
+                      label={holidayTab === 'legal' ? '법정공휴일 날짜 선택' : '전투휴무 날짜 선택'}
                       year={newHoliday.year}
                       month={newHoliday.month}
                       day={newHoliday.day}
@@ -817,22 +881,47 @@ export default function GenerateSchedule() {
                     <Button 
                       variant="outline" 
                       onClick={addCustomHoliday}
-                      className="w-full h-11 rounded-xl font-bold border-red-100 text-red-600 hover:bg-red-50"
+                      className={`w-full h-11 rounded-xl font-bold ${
+                        holidayTab === 'legal'
+                          ? 'border-red-100 text-red-600 hover:bg-red-50'
+                          : 'border-orange-100 text-orange-600 hover:bg-orange-50'
+                      }`}
                     >
-                      휴무일(공휴일) 추가
+                      {holidayTab === 'legal' ? '법정공휴일 추가' : '전투휴무 추가'}
                     </Button>
                   </div>
 
-                  {customHolidays.length > 0 && (
-                    <div className="flex flex-wrap gap-2">
-                      {customHolidays.map((date) => (
-                        <div key={date} className="flex items-center gap-2 px-3 py-1.5 bg-red-50 border border-red-100 rounded-full">
-                          <span className="text-xs font-bold text-red-600">{date}</span>
-                          <button onClick={() => removeCustomHoliday(date)} className="text-red-400 hover:text-red-600">
-                            <X className="w-3 h-3" />
-                          </button>
-                        </div>
-                      ))}
+                  {/* Legal holidays list */}
+                  {holidayTab === 'legal' && customHolidays.length > 0 && (
+                    <div className="space-y-2">
+                      <p className="text-[10px] font-bold text-red-500 uppercase tracking-wider">추가된 법정공휴일 ({customHolidays.length})</p>
+                      <div className="flex flex-wrap gap-2">
+                        {customHolidays.map((date) => (
+                          <div key={date} className="flex items-center gap-2 px-3 py-1.5 bg-red-50 border border-red-100 rounded-full">
+                            <span className="text-xs font-bold text-red-600">{date}</span>
+                            <button onClick={() => removeCustomHoliday(date)} className="text-red-400 hover:text-red-600">
+                              <X className="w-3 h-3" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Combat rest days list */}
+                  {holidayTab === 'combat' && combatRestDays.length > 0 && (
+                    <div className="space-y-2">
+                      <p className="text-[10px] font-bold text-orange-500 uppercase tracking-wider">추가된 전투휴무 ({combatRestDays.length})</p>
+                      <div className="flex flex-wrap gap-2">
+                        {combatRestDays.map((date) => (
+                          <div key={date} className="flex items-center gap-2 px-3 py-1.5 bg-orange-50 border border-orange-100 rounded-full">
+                            <span className="text-xs font-bold text-orange-600">{date}</span>
+                            <button onClick={() => removeCombatRestDay(date)} className="text-orange-400 hover:text-orange-600">
+                              <X className="w-3 h-3" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   )}
                 </CardContent>

@@ -195,7 +195,7 @@ export const api = {
     return response.json();
   },
 
-  async generateDuties(token: string, year: number, month: number, weekdayUsers: string[], weekendUsers: string[], exclusions: { userId: string, startDate: string, endDate: string }[] = [], customHolidays: string[] = [], fridayAsWeekend: boolean = true) {
+  async generateDuties(token: string, year: number, month: number, weekdayUsers: string[], weekendUsers: string[], exclusions: { userId: string, startDate: string, endDate: string }[] = [], customHolidays: string[] = [], fridayAsWeekend: boolean = true, combatRestDays: string[] = []) {
     const response = await fetch(`${API_BASE_URL}/duties/generate`, {
       method: 'POST',
       headers: {
@@ -203,7 +203,7 @@ export const api = {
         'Authorization': `Bearer ${publicAnonKey}`,
         'x-user-token': token
       },
-      body: JSON.stringify({ year, month, weekdayUsers, weekendUsers, exclusions, customHolidays, fridayAsWeekend }),
+      body: JSON.stringify({ year, month, weekdayUsers, weekendUsers, exclusions, customHolidays, fridayAsWeekend, combatRestDays }),
     });
 
     if (!response.ok) {
@@ -448,7 +448,7 @@ export const api = {
     return response.json();
   },
 
-  async createSwapRequestV2(token: string, year: number, month: number, fromDate: number, toDate: number) {
+  async createSwapRequestV2(token: string, fromYear: number, fromMonth: number, fromDate: number, toYear: number, toMonth: number, toDate: number, mode: 'mutual' | 'oneway' = 'mutual') {
     const response = await fetch(`${API_BASE_URL}/swap-requests-v2`, {
       method: 'POST',
       headers: {
@@ -456,12 +456,31 @@ export const api = {
         'Authorization': `Bearer ${publicAnonKey}`,
         'x-user-token': token
       },
-      body: JSON.stringify({ year, month, fromDate, toDate }),
+      body: JSON.stringify({ fromYear, fromMonth, fromDate, toYear, toMonth, toDate, mode }),
     });
 
     if (!response.ok) {
       const error = await response.json();
       throw new Error(error.error || '교환 요청 생성 실패');
+    }
+
+    return response.json();
+  },
+
+  async createOnewaySwap(token: string, toYear: number, toMonth: number, toDate: number) {
+    const response = await fetch(`${API_BASE_URL}/swap-requests-v2`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${publicAnonKey}`,
+        'x-user-token': token
+      },
+      body: JSON.stringify({ toYear, toMonth, toDate, mode: 'oneway' }),
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || '대리근무 요청 생성 실패');
     }
 
     return response.json();

@@ -295,7 +295,7 @@ app.post('/make-server-a032f464/duties/generate', async (c) => {
     const userData = await kv.get(`user:${user.id}`);
     if (userData?.role !== 'admin') return c.json({ error: 'Admin only' }, 403);
 
-    const { year, month, weekdayUsers, weekendUsers, exclusions = [], customHolidays = [], fridayAsWeekend = true } = await c.req.json();
+    const { year, month, weekdayUsers, weekendUsers, exclusions = [], customHolidays = [], combatRestDays = [], fridayAsWeekend = true } = await c.req.json();
     
     const allUserData = await kv.getByPrefix('user:');
     const userMap = new Map(allUserData.map(u => [u.id, u]));
@@ -312,6 +312,12 @@ app.post('/make-server-a032f464/duties/generate', async (c) => {
     const isCustomHoliday = (dateObj: Date) => {
       const dateStr = `${dateObj.getFullYear()}-${String(dateObj.getMonth() + 1).padStart(2, '0')}-${String(dateObj.getDate()).padStart(2, '0')}`;
       return customHolidays.includes(dateStr);
+    };
+
+    // Helper to check if a date is a combat rest day
+    const isCombatRestDay = (dateObj: Date) => {
+      const dateStr = `${dateObj.getFullYear()}-${String(dateObj.getMonth() + 1).padStart(2, '0')}-${String(dateObj.getDate()).padStart(2, '0')}`;
+      return combatRestDays.includes(dateStr);
     };
 
     // Helper to check if user is excluded on a specific date
@@ -336,7 +342,9 @@ app.post('/make-server-a032f464/duties/generate', async (c) => {
         : (dayOfWeek === 0 || dayOfWeek === 6); // 토일만
       const isOfficialHoliday = isKoreanHoliday(year, month, d);
       const isCustomHoli = isCustomHoliday(date);
-      const isHoliday = isOfficialHoliday || isCustomHoli;
+      const isCombatRest = isCombatRestDay(date);
+      const isLegalHoliday = isOfficialHoliday || isCustomHoli;
+      const isHoliday = isLegalHoliday || isCombatRest;
       
       // 금토일 또는 공휴일은 주말 순번 사용
       const isWE = isWeekend || isHoliday;
@@ -345,7 +353,7 @@ app.post('/make-server-a032f464/duties/generate', async (c) => {
       let ptr = isWE ? weIdx : wdIdx;
       
       if (sequence.length === 0) {
-        duties.push({ date: d, userId: '', userName: '미지정', type: isWE ? 'weekend' : 'weekday', isHoliday });
+        duties.push({ date: d, userId: '', userName: '미지정', type: isWE ? 'weekend' : 'weekday', isHoliday, holidayType: isLegalHoliday ? 'legal' : isCombatRest ? 'combat' : undefined });
         continue;
       }
 
@@ -369,7 +377,8 @@ app.post('/make-server-a032f464/duties/generate', async (c) => {
         userId: selectedUid, 
         userName: uInfo?.name || 'Unknown', 
         type: isWE ? 'weekend' : 'weekday',
-        isHoliday: isHoliday  // 공휴일은 실제 공휴일만 표시
+        isHoliday,
+        holidayType: isLegalHoliday ? 'legal' : isCombatRest ? 'combat' : undefined
       });
     }
 
@@ -465,30 +474,93 @@ app.post('/make-server-a032f464/swap-requests/:requestId/:action', async (c) => 
     return c.json({ success: true, request: req });
   }
 
-  // 승인/거절 처리 (받는 사람만 가능)
+  // 승인/거절 (받는 사람만)
   if (req.toUserId !== user.id) return c.json({ error: '받는 사람만 처리할 수 있습니다.' }, 403);
   if (req.status !== 'pending') return c.json({ error: '이미 처리된 요청입니다.' }, 400);
 
+  const isOneway = req.mode === 'oneway';
+  const fYear = req.fromYear || req.year;
+  const fMonth = req.fromMonth || req.month;
+  const tYear = req.toYear || req.year;
+  const tMonth = req.toMonth || req.month;
+  const isSameMonth = fYear === tYear && fMonth === tMonth;
+
   if (action === 'approve') {
-    const ds = await kv.get(`duties:${req.year}-${req.month}`);
-    if (!ds) return c.json({ error: '당직 일정을 찾을 수 없습니다.' }, 404);
-    
-    const updated = ds.map((d: any) => {
-      if (d.date === req.date) {
-        if (d.userId === req.fromUserId) return { ...d, userId: req.toUserId, userName: req.toUserName };
-        if (d.userId === req.toUserId) return { ...d, userId: req.fromUserId, userName: req.fromUserName };
-      }
-      return d;
-    });
-    await kv.set(`duties:${req.year}-${req.month}`, updated);
+    if (isOneway) {
+      // One-way: only change the target date's userId to requester
+      const toDuties = await kv.get(`duties:${tYear}-${tMonth}`);
+      if (!toDuties) return c.json({ error: '당직 일정을 찾을 수 없습니다.' }, 404);
+
+      const updated = toDuties.map((d: any) => {
+        if (d.date === req.toDate && d.userId === req.toUserId) {
+          return { ...d, userId: req.fromUserId, userName: req.fromUserName };
+        }
+        return d;
+      });
+      await kv.set(`duties:${tYear}-${tMonth}`, updated);
+    } else if (isSameMonth) {
+      // Same month mutual swap
+      const fromDuties = await kv.get(`duties:${fYear}-${fMonth}`);
+      if (!fromDuties) return c.json({ error: '당직 일정을 찾을 수 없습니다.' }, 404);
+
+      const updated = fromDuties.map((d: any) => {
+        if (d.date === req.fromDate && d.userId === req.fromUserId) {
+          return { ...d, userId: req.toUserId, userName: req.toUserName };
+        }
+        if (d.date === (req.toDate || req.date) && d.userId === req.toUserId) {
+          return { ...d, userId: req.fromUserId, userName: req.fromUserName };
+        }
+        return d;
+      });
+      await kv.set(`duties:${fYear}-${fMonth}`, updated);
+    } else {
+      // Cross-month mutual swap
+      const fromDuties = await kv.get(`duties:${fYear}-${fMonth}`);
+      if (!fromDuties) return c.json({ error: '당직 일정을 찾을 수 없습니다.' }, 404);
+      const toDuties = await kv.get(`duties:${tYear}-${tMonth}`);
+      if (!toDuties) return c.json({ error: `${tYear}년 ${tMonth}월 당직 일정을 찾을 수 없습니다.` }, 404);
+
+      const updatedFrom = fromDuties.map((d: any) => {
+        if (d.date === req.fromDate && d.userId === req.fromUserId) {
+          return { ...d, userId: req.toUserId, userName: req.toUserName };
+        }
+        return d;
+      });
+
+      const updatedTo = toDuties.map((d: any) => {
+        if (d.date === req.toDate && d.userId === req.toUserId) {
+          return { ...d, userId: req.fromUserId, userName: req.fromUserName };
+        }
+        return d;
+      });
+
+      await kv.set(`duties:${fYear}-${fMonth}`, updatedFrom);
+      await kv.set(`duties:${tYear}-${tMonth}`, updatedTo);
+    }
     req.status = 'approved';
   } else {
     req.status = 'rejected';
   }
 
   await kv.set(`swap-request:${requestId}`, req);
+  
+  const notifMsg = isOneway
+    ? `${tMonth}/${req.toDate}일 대리근무 요청이 ${action === 'approve' ? '승인' : '거절'}되었습니다.`
+    : (() => {
+        const dateInfo = isSameMonth
+          ? `${fMonth}/${req.fromDate}일 ↔ ${fMonth}/${req.toDate || req.date}일`
+          : `${fYear}년${fMonth}월${req.fromDate}일 ↔ ${tYear}년${tMonth}월${req.toDate}일`;
+        return `${dateInfo} 교환 요청이 ${action === 'approve' ? '승인' : '거절'}되었습니다.`;
+      })();
+  
   const notifs = (await kv.get(`notifications:${req.fromUserId}`)) || [];
-  notifs.push({ id: Date.now(), message: `교환 요청이 ${action === 'approve' ? '승인' : '거절'}되었습니다.`, type: 'swap-response', read: false, createdAt: new Date().toISOString() });
+  notifs.push({
+    id: Date.now(),
+    message: notifMsg,
+    type: 'swap-response',
+    read: false,
+    createdAt: new Date().toISOString()
+  });
   await kv.set(`notifications:${req.fromUserId}`, notifs);
 
   return c.json({ success: true, request: req });
@@ -758,40 +830,61 @@ app.post('/make-server-a032f464/settings/duty-prices', async (c) => {
   }
 });
 
-// 날짜 기반 교환 요청 (v2) - fromDate의 내 당직을 toDate 당직자와 교환
+// 날짜 기반 교환 요청 (v2) - 크로스 월 교환 지원
 app.post('/make-server-a032f464/swap-requests-v2', async (c) => {
   try {
     const user = await verifyUser(c.req);
     if (!user) return c.json({ error: 'Unauthorized' }, 401);
 
-    const { year, month, fromDate, toDate } = await c.req.json();
+    const { fromYear, fromMonth, fromDate, toYear, toMonth, toDate, mode = 'mutual',
+            // backward compat: old clients may send year/month
+            year: legacyYear, month: legacyMonth } = await c.req.json();
     
-    if (!year || !month || !fromDate || !toDate) {
+    const isOneway = mode === 'oneway';
+    
+    const tYear = toYear || legacyYear;
+    const tMonth = toMonth || legacyMonth;
+    
+    if (!tYear || !tMonth || !toDate) {
       return c.json({ error: '필수 항목이 누락되었습니다.' }, 400);
     }
-    if (fromDate === toDate) {
+
+    // For mutual mode, fromDate is required
+    const fYear = fromYear || legacyYear;
+    const fMonth = fromMonth || legacyMonth;
+    if (!isOneway && (!fYear || !fMonth || !fromDate)) {
+      return c.json({ error: '필수 항목이 누락되었습니다.' }, 400);
+    }
+    if (!isOneway && fYear === tYear && fMonth === tMonth && fromDate === toDate) {
       return c.json({ error: '같은 날짜끼리는 교환할 수 없습니다.' }, 400);
     }
 
-    const duties = (await kv.get(`duties:${year}-${month}`)) || [];
-    if (duties.length === 0) {
-      return c.json({ error: '해당 월의 당직 일정이 없습니다.' }, 404);
+    // Load target duties
+    const toDuties = (await kv.get(`duties:${tYear}-${tMonth}`)) || [];
+    if (toDuties.length === 0) {
+      return c.json({ error: `${tYear}년 ${tMonth}월 당직 일정이 없습니다.` }, 404);
     }
 
-    const fromDuty = duties.find((d: any) => d.date === fromDate);
-    const toDuty = duties.find((d: any) => d.date === toDate);
-
-    if (!fromDuty) return c.json({ error: `${fromDate}일에 배정된 당직이 없습니다.` }, 400);
+    const toDuty = toDuties.find((d: any) => d.date === toDate);
     if (!toDuty) return c.json({ error: `${toDate}일에 배정된 당직이 없습니다.` }, 400);
 
-    // 요청자가 fromDate 당직자인지 확인
-    if (fromDuty.userId !== user.id) {
-      return c.json({ error: '본인의 당직 날짜만 교환 요청할 수 있습니다.' }, 403);
+    // 자기 자신 당직은 대리 불가
+    if (toDuty.userId === user.id) {
+      return c.json({ error: '본인의 당직은 선택할 수 없습니다.' }, 400);
     }
 
-    // 자기 자신과 교환 불가
-    if (toDuty.userId === user.id) {
-      return c.json({ error: '본인의 다른 당직과는 교환할 수 없습니다.' }, 400);
+    // For mutual mode, verify fromDate ownership
+    if (!isOneway) {
+      const isSameMonth = fYear === tYear && fMonth === tMonth;
+      const fromDuties = isSameMonth ? toDuties : ((await kv.get(`duties:${fYear}-${fMonth}`)) || []);
+      if (!isSameMonth && fromDuties.length === 0) {
+        return c.json({ error: `${fYear}년 ${fMonth}월 당직 일정이 없습니다.` }, 404);
+      }
+      const fromDuty = fromDuties.find((d: any) => d.date === fromDate);
+      if (!fromDuty) return c.json({ error: `${fromDate}일에 배정된 당직이 없습니다.` }, 400);
+      if (fromDuty.userId !== user.id) {
+        return c.json({ error: '본인의 당직 날짜만 교환 요청할 수 있습니다.' }, 403);
+      }
     }
 
     const uFrom = await kv.get(`user:${user.id}`);
@@ -805,21 +898,35 @@ app.post('/make-server-a032f464/swap-requests-v2', async (c) => {
       fromUserName: uFrom.name,
       toUserId: toDuty.userId,
       toUserName: uTo.name,
-      year,
-      month,
-      fromDate,
+      fromYear: isOneway ? null : fYear,
+      fromMonth: isOneway ? null : fMonth,
+      fromDate: isOneway ? null : fromDate,
+      toYear: tYear,
+      toMonth: tMonth,
       toDate,
-      date: fromDate, // backward compat
+      mode,
+      year: tYear, // backward compat
+      month: tMonth, // backward compat
+      date: isOneway ? toDate : fromDate, // backward compat
       status: 'pending',
       createdAt: new Date().toISOString()
     };
     await kv.set(`swap-request:${rid}`, req);
 
     // 상대방에게 알림
+    const notifMsg = isOneway
+      ? `${uFrom.name}님이 ${tMonth}/${toDate}일 당직을 대신 서겠다고 요청했습니다.`
+      : (() => {
+          const isSame = fYear === tYear && fMonth === tMonth;
+          const dateStr = isSame
+            ? `${fMonth}/${fromDate}일 ↔ ${tMonth}/${toDate}일`
+            : `${fYear}년${fMonth}월${fromDate}일 ↔ ${tYear}년${tMonth}월${toDate}일`;
+          return `${uFrom.name}님이 ${dateStr} 당직 교환을 요청했습니다.`;
+        })();
     const notifs = (await kv.get(`notifications:${toDuty.userId}`)) || [];
     notifs.push({
       id: Date.now(),
-      message: `${uFrom.name}님이 ${month}/${fromDate}일 ↔ ${month}/${toDate}일 당직 교환을 요청했습니다.`,
+      message: notifMsg,
       type: 'swap-request',
       requestId: rid,
       read: false,
@@ -834,7 +941,7 @@ app.post('/make-server-a032f464/swap-requests-v2', async (c) => {
   }
 });
 
-// 요청 처리 (v2 지원 - 양방향 날짜 교환)
+// 요청 처리 (v2 지원 - 크로스 월 양방향 날짜 교환)
 app.post('/make-server-a032f464/swap-requests-v2/:requestId/:action', async (c) => {
   const user = await verifyUser(c.req);
   if (!user) return c.json({ error: 'Unauthorized' }, 401);
@@ -868,34 +975,64 @@ app.post('/make-server-a032f464/swap-requests-v2/:requestId/:action', async (c) 
   if (req.toUserId !== user.id) return c.json({ error: '받는 사람만 처리할 수 있습니다.' }, 403);
   if (req.status !== 'pending') return c.json({ error: '이미 처리된 요청입니다.' }, 400);
 
-  if (action === 'approve') {
-    const ds = await kv.get(`duties:${req.year}-${req.month}`);
-    if (!ds) return c.json({ error: '당직 일정을 찾을 수 없습니다.' }, 404);
+  const isOneway = req.mode === 'oneway';
+  const fYear = req.fromYear || req.year;
+  const fMonth = req.fromMonth || req.month;
+  const tYear = req.toYear || req.year;
+  const tMonth = req.toMonth || req.month;
+  const isSameMonth = fYear === tYear && fMonth === tMonth;
 
-    const hasFromDate = !!req.fromDate;
-    
-    if (hasFromDate && req.toDate) {
-      // v2: 양방향 날짜 교환 (fromDate ↔ toDate)
-      const updated = ds.map((d: any) => {
-        if (d.date === req.fromDate && d.userId === req.fromUserId) {
-          return { ...d, userId: req.toUserId, userName: req.toUserName };
-        }
+  if (action === 'approve') {
+    if (isOneway) {
+      // One-way: only change the target date's userId to requester
+      const toDuties = await kv.get(`duties:${tYear}-${tMonth}`);
+      if (!toDuties) return c.json({ error: '당직 일정을 찾을 수 없습니다.' }, 404);
+
+      const updated = toDuties.map((d: any) => {
         if (d.date === req.toDate && d.userId === req.toUserId) {
           return { ...d, userId: req.fromUserId, userName: req.fromUserName };
         }
         return d;
       });
-      await kv.set(`duties:${req.year}-${req.month}`, updated);
-    } else {
-      // v1: 기존 단일 날짜 교환 (backward compat)
-      const updated = ds.map((d: any) => {
-        if (d.date === req.date) {
-          if (d.userId === req.fromUserId) return { ...d, userId: req.toUserId, userName: req.toUserName };
-          if (d.userId === req.toUserId) return { ...d, userId: req.fromUserId, userName: req.fromUserName };
+      await kv.set(`duties:${tYear}-${tMonth}`, updated);
+    } else if (isSameMonth) {
+      // Same month mutual swap
+      const fromDuties = await kv.get(`duties:${fYear}-${fMonth}`);
+      if (!fromDuties) return c.json({ error: '당직 일정을 찾을 수 없습니다.' }, 404);
+
+      const updated = fromDuties.map((d: any) => {
+        if (d.date === req.fromDate && d.userId === req.fromUserId) {
+          return { ...d, userId: req.toUserId, userName: req.toUserName };
+        }
+        if (d.date === (req.toDate || req.date) && d.userId === req.toUserId) {
+          return { ...d, userId: req.fromUserId, userName: req.fromUserName };
         }
         return d;
       });
-      await kv.set(`duties:${req.year}-${req.month}`, updated);
+      await kv.set(`duties:${fYear}-${fMonth}`, updated);
+    } else {
+      // Cross-month mutual swap
+      const fromDuties = await kv.get(`duties:${fYear}-${fMonth}`);
+      if (!fromDuties) return c.json({ error: '당직 일정을 찾을 수 없습니다.' }, 404);
+      const toDuties = await kv.get(`duties:${tYear}-${tMonth}`);
+      if (!toDuties) return c.json({ error: `${tYear}년 ${tMonth}월 당직 일정을 찾을 수 없습니다.` }, 404);
+
+      const updatedFrom = fromDuties.map((d: any) => {
+        if (d.date === req.fromDate && d.userId === req.fromUserId) {
+          return { ...d, userId: req.toUserId, userName: req.toUserName };
+        }
+        return d;
+      });
+
+      const updatedTo = toDuties.map((d: any) => {
+        if (d.date === req.toDate && d.userId === req.toUserId) {
+          return { ...d, userId: req.fromUserId, userName: req.fromUserName };
+        }
+        return d;
+      });
+
+      await kv.set(`duties:${fYear}-${fMonth}`, updatedFrom);
+      await kv.set(`duties:${tYear}-${tMonth}`, updatedTo);
     }
     req.status = 'approved';
   } else {
@@ -903,13 +1040,20 @@ app.post('/make-server-a032f464/swap-requests-v2/:requestId/:action', async (c) 
   }
 
   await kv.set(`swap-request:${requestId}`, req);
+  
+  const notifMsg = isOneway
+    ? `${tMonth}/${req.toDate}일 대리근무 요청이 ${action === 'approve' ? '승인' : '거절'}되었습니다.`
+    : (() => {
+        const dateInfo = isSameMonth
+          ? `${fMonth}/${req.fromDate}일 ↔ ${fMonth}/${req.toDate || req.date}일`
+          : `${fYear}년${fMonth}월${req.fromDate}일 ↔ ${tYear}년${tMonth}월${req.toDate}일`;
+        return `${dateInfo} 교환 요청이 ${action === 'approve' ? '승인' : '거절'}되었습니다.`;
+      })();
+  
   const notifs = (await kv.get(`notifications:${req.fromUserId}`)) || [];
-  const dateInfo = req.fromDate && req.toDate 
-    ? `${req.month}/${req.fromDate}일 ↔ ${req.month}/${req.toDate}일` 
-    : `${req.month}/${req.date}일`;
   notifs.push({
     id: Date.now(),
-    message: `${dateInfo} 교환 요청이 ${action === 'approve' ? '승인' : '거절'}되었습니다.`,
+    message: notifMsg,
     type: 'swap-response',
     read: false,
     createdAt: new Date().toISOString()
